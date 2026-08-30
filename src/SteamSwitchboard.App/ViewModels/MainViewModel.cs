@@ -293,7 +293,9 @@ public sealed class MainViewModel : ObservableObject
     public bool IsAccountDeletionPending(Guid accountId) =>
         _state.PendingBrowserProfileDeletionIds.Contains(accountId);
 
-    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    public async Task InitializeAsync(
+        CancellationToken cancellationToken = default,
+        bool refreshGames = true)
     {
         IsBusy = true;
         string? stateLoadWarning = null;
@@ -324,7 +326,10 @@ public sealed class MainViewModel : ObservableObject
 
             SteamExecutablePath = _steamInstallation.FindSteamExecutable(
                 _state.Settings.SteamExecutablePath);
-            await RefreshGamesAsync(cancellationToken);
+            if (refreshGames)
+            {
+                await RefreshGamesAsync(cancellationToken);
+            }
             StatusMessage = stateLoadWarning
                 ?? (HasAccounts
                     ? _state.PendingBrowserProfileDeletionIds.Count > 0

@@ -16,7 +16,7 @@ SteamSwitchboard is a privacy-first Windows companion for people who use several
 - **Account-aware notifications.** Steam web notifications are surfaced with the receiving Switchboard profile, immutable login name, and Steam-provided notification title (normally the sender shown by Steam). Tagged replacements, native click/close lifecycle, a correlated unread fallback, raw-input bounds, and per-profile/global flood circuit breakers prevent duplicates and unbounded work. Message previews are off by default, Windows alerts have a master switch, notification text is never persisted, and the in-app history is bounded to the current run. A Windows alert click opens the labelled notification center because the legacy balloon API does not identify which alert was clicked; choosing a specific entry there opens the correct account.
 - **Safer account-aware launching.** Switchboard discovers installed Steam libraries and labels every action `Play as <account>`. Before launching, it repeatedly verifies a local Valve-signed `steam.exe`, one stable Steam process identity, and one authoritative active SteamID—including a final check after locking the executable. If anything is unknown, duplicated, or changes, launch stays blocked.
 - **Capacity beyond Steam's small account cache.** Switchboard supports up to 512 saved profiles on one PC. A safety budget keeps at most 16 WebView2 chats live simultaneously; the least-recently-used hidden workspace closes and transparently reopens when a seventeenth profile is selected. These explicit bounds prevent a damaged state file from exhausting the machine.
-- **Beginner-friendly operation.** Steam and installed games are discovered automatically. Friendly profile labels can be renamed at any time, the play account has its own clear drop-down, and account removal includes a plain-language confirmation and local-session cleanup.
+- **Beginner-friendly operation.** Steam and installed games are discovered automatically. Friendly profile labels can be renamed at any time, the play account has its own clear drop-down, and account removal includes a plain-language confirmation and local-session cleanup. Navigation and settings remain available while chat workspaces connect or recover.
 
 ## Quick start
 
@@ -75,6 +75,12 @@ Development requires the .NET 9 SDK on Windows.
 
 That command regenerates the icon, performs a signed-package/locked restore with NuGet auditing, verifies formatting, compiles Release with warnings and security diagnostics treated as errors, and runs the full test suite.
 
+On an interactive Windows desktop with WebView2 installed, reproduce the two-account startup, forced timeout/fresh-session reconnect, input, HWND-layering, and monitor-boundary checks with disposable data:
+
+```powershell
+./scripts/test-ui-regression.ps1
+```
+
 For the extended dependency, secret, configuration, and static-analysis pass:
 
 ```powershell
@@ -93,6 +99,7 @@ The ZIP and SHA-256 checksum are written to `artifacts/release/`. Packaging vali
 
 - `src/SteamSwitchboard.App` — WPF application, WebView2 chat profiles, Steam discovery, and guarded launch flow
 - `tests/SteamSwitchboard.Tests` — parser, persistence, policy, discovery, navigation, and account-transition tests
+- `tests/SteamSwitchboard.UiRegression` — disposable real-window/WebView2 interaction and composed-layer regression harness
 - `docs/ARCHITECTURE.md` — component and trust-boundary design
 - `docs/VALIDATION.md` — automated and live validation evidence
 - `docs/GITHUB_RELEASE.md` — beginner GitHub push, Actions build, scan, artifact, and release steps

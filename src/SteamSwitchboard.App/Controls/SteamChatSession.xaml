@@ -31,7 +31,8 @@
         <Border Grid.Row="1" Background="White" CornerRadius="0,0,10,10" ClipToBounds="True">
             <wv2:WebView2 x:Name="Browser"
                           AutomationProperties.Name="Steam Friends and Chat web page"
-                          DefaultBackgroundColor="White" />
+                          DefaultBackgroundColor="White"
+                          Visibility="Hidden" />
         </Border>
 
         <Border x:Name="LoadingOverlay"
@@ -70,7 +71,8 @@
                 <TextBlock x:Name="ErrorMessage"
                            Margin="0,8,0,20"
                            Style="{StaticResource MutedText}" />
-                <Button Width="140"
+                <Button x:Name="ReconnectButton"
+                        Width="140"
                         Content="Reconnect"
                         Click="OnReconnectClicked"
                         Style="{StaticResource PrimaryButton}" />

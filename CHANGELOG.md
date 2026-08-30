@@ -16,6 +16,7 @@ First GitHub-ready source release and self-contained Windows package.
 - Added a saved, independent **Play account** drop-down plus account-aware launch verification, guided native Steam account switching, and automatic launch after the requested account is verified.
 - Added explicit profile forgetting with browser-data clearing and profile deletion.
 - Added an original SteamSwitchboard brand mark, responsive application icon set, high-DPI keyboard-accessible WPF interface, and beginner onboarding.
+- Kept the full shell interactive while isolated chat browsers start, bounded every browser startup attempt, prevented hidden WebView surfaces from painting across the sidebar, and clamped the native window to the active monitor at per-monitor DPI.
 
 ### Security and privacy
 
@@ -30,7 +31,7 @@ First GitHub-ready source release and self-contained Windows package.
 
 ### Quality and release
 
-- Added 125 automated tests plus Semgrep, Trivy, and transitive dependency auditing.
+- Added 131 automated tests, a repeatable composed-window WPF/WebView2 regression harness, plus Semgrep, Trivy, and transitive dependency auditing.
 - Enforced signed NuGet source policy, an isolated clean-cache signer check, lock files, warnings/security diagnostics as build errors, and zero-warning Release builds.
 - Added a read-only GitHub Actions gate with pinned Semgrep and Trivy versions that must pass before Windows compilation, tests, packaging, or tag-artifact upload.
 - Added deterministic ZIP metadata, pre-extraction traversal/link/resource/session-data checks, adversarial package-validator fixtures, and clean-install smoke assertions.

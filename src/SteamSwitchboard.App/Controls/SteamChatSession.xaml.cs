@@ -20,6 +20,8 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
     private const string SteamOrigin = "https://steamcommunity.com";
     private const string SafeBlankDocument =
         "<!doctype html><html><head><meta charset=\"utf-8\"></head><body></body></html>";
+    private static readonly TimeSpan DefaultBrowserInitializationTimeout =
+        TimeSpan.FromSeconds(15);
 
     private static readonly Uri ChatUri = new("https://steamcommunity.com/chat/");
     private static readonly Regex UnreadTitlePattern = new(
@@ -31,30 +33,61 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
     private static DateTimeOffset _globalNotificationCircuitOpenUntil;
 
     private readonly AccountViewModel _account;
+    private readonly Func<WebView2, Task> _browserInitializer;
     private readonly string _browserDataFolder;
+    private readonly TimeSpan _browserInitializationTimeout;
     private readonly HashSet<CoreWebView2Frame> _frames = [];
+    private readonly BrowserNavigationTracker _navigationTracker = new();
     private readonly DispatcherTimer _notificationFallbackTimer;
     private readonly Queue<DateTimeOffset> _notificationTimes = [];
     private readonly SemaphoreSlim _safeNavigationGate = new(1, 1);
-    private bool _initialized;
+    private Task? _browserInitializationTask;
+    private Task? _initializationAttempt;
+    private Task? _permissionResetTask;
+    private bool _configured;
     private bool _disposed;
     private bool _eventsAttached;
     private bool _externalPromptOpen;
+    private bool _initializationFailed;
+    private bool _isPresentedToUser;
     private bool _keepConnectedWhenHidden = true;
     private bool _mediaTeardownInProgress;
     private bool _microphonePermissionRequested;
     private bool _securityClosed;
+    private long _presentationGeneration;
     private DateTimeOffset _lastNativeNotificationUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastFallbackNotificationUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _lastExternalPromptUtc = DateTimeOffset.MinValue;
     private DateTimeOffset _notificationCircuitOpenUntil = DateTimeOffset.MinValue;
 
     public SteamChatSession(AccountViewModel account, string browserDataFolder)
+        : this(
+            account,
+            browserDataFolder,
+            DefaultBrowserInitializationTimeout,
+            static browser => browser.EnsureCoreWebView2Async())
+    {
+    }
+
+    internal SteamChatSession(
+        AccountViewModel account,
+        string browserDataFolder,
+        TimeSpan browserInitializationTimeout,
+        Func<WebView2, Task> browserInitializer)
     {
         InitializeComponent();
         _account = account ?? throw new ArgumentNullException(nameof(account));
         ArgumentException.ThrowIfNullOrWhiteSpace(browserDataFolder);
         _browserDataFolder = browserDataFolder;
+        if (browserInitializationTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(browserInitializationTimeout));
+        }
+
+        _browserInitializationTimeout = browserInitializationTimeout;
+        _browserInitializer = browserInitializer
+            ?? throw new ArgumentNullException(nameof(browserInitializer));
         _notificationFallbackTimer = new DispatcherTimer(
             TimeSpan.FromSeconds(1.5),
             DispatcherPriority.Background,
@@ -73,52 +106,82 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
 
     public event EventHandler? ChatReadyWhileVisible;
 
-    public Task InitializeAsync() => InitializeCoreAsync(navigateToChat: true);
+    public event EventHandler? ReconnectSessionRequested;
 
-    public Task InitializeForCleanupAsync() => InitializeCoreAsync(navigateToChat: false);
+    public Task InitializeAsync() => InitializeOnceAsync(navigateToChat: true);
+
+    public Task InitializeForCleanupAsync() =>
+        InitializeOnceAsync(navigateToChat: false);
+
+    private Task InitializeOnceAsync(bool navigateToChat)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_configured)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (_initializationAttempt is { IsCompleted: false })
+        {
+            return _initializationAttempt;
+        }
+
+        _initializationAttempt = InitializeCoreAsync(navigateToChat);
+        return _initializationAttempt;
+    }
 
     private async Task InitializeCoreAsync(bool navigateToChat)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_initialized)
-        {
-            return;
-        }
-
-        _initialized = true;
         _account.ConnectionState = ChatConnectionState.Starting;
         if (!LocalPathPolicy.TryNormalizeLocalPath(
                 _browserDataFolder,
                 out _,
                 requireExisting: false))
         {
+            _initializationFailed = true;
             ShowFailure("The secure browser data folder is not a safe local path.");
-            return;
-        }
-
-        Directory.CreateDirectory(_browserDataFolder);
-        if (!LocalPathPolicy.TryNormalizeLocalPath(_browserDataFolder, out _))
-        {
-            ShowFailure("The secure browser data folder cannot use links or remote storage.");
             return;
         }
 
         try
         {
-            Browser.CreationProperties = new CoreWebView2CreationProperties
+            Directory.CreateDirectory(_browserDataFolder);
+            if (!LocalPathPolicy.TryNormalizeLocalPath(_browserDataFolder, out _))
             {
-                UserDataFolder = _browserDataFolder,
-                ProfileName = _account.Profile.BrowserProfileName,
-                IsInPrivateModeEnabled = false
-            };
+                _initializationFailed = true;
+                ShowFailure("The secure browser data folder cannot use links or remote storage.");
+                return;
+            }
 
-            await Browser.EnsureCoreWebView2Async();
+            var initializationTimer = Stopwatch.StartNew();
+            if (_browserInitializationTask is null)
+            {
+                Browser.CreationProperties = new CoreWebView2CreationProperties
+                {
+                    UserDataFolder = _browserDataFolder,
+                    ProfileName = _account.Profile.BrowserProfileName,
+                    IsInPrivateModeEnabled = false
+                };
+                _browserInitializationTask = _browserInitializer(Browser);
+            }
+
+            await _browserInitializationTask.WaitAsync(
+                _browserInitializationTimeout);
             if (_disposed)
             {
                 return;
             }
 
-            await ResetPersistedPermissionsAsync(Browser.CoreWebView2.Profile);
+            var remaining = _browserInitializationTimeout - initializationTimer.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                throw new TimeoutException();
+            }
+
+            _permissionResetTask ??=
+                ResetPersistedPermissionsAsync(Browser.CoreWebView2.Profile);
+            await _permissionResetTask.WaitAsync(remaining);
             if (_disposed)
             {
                 return;
@@ -127,23 +190,60 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
             ConfigureSecurity(Browser.CoreWebView2);
             if (navigateToChat)
             {
-                AttachEvents(Browser.CoreWebView2);
-                _eventsAttached = true;
+                if (!_eventsAttached)
+                {
+                    AttachEvents(Browser.CoreWebView2);
+                    _eventsAttached = true;
+                }
+
                 Browser.CoreWebView2.Navigate(ChatUri.AbsoluteUri);
             }
+
+            _initializationFailed = false;
+            _configured = true;
+        }
+        catch (TimeoutException)
+        {
+            _initializationFailed = true;
+            ShowFailure(
+                "Steam Chat took too long to open. The rest of Switchboard is still available; choose Reconnect to try this workspace again.");
         }
         catch (Exception exception) when (
             exception is InvalidOperationException
                 or ArgumentException
-                or COMException)
+                or COMException
+                or IOException
+                or UnauthorizedAccessException
+                or System.Security.SecurityException
+                or WebView2RuntimeNotFoundException)
         {
+            _initializationFailed = true;
+            if (_browserInitializationTask is { IsCompleted: true }
+                && Browser.CoreWebView2 is null)
+            {
+                _browserInitializationTask = null;
+            }
+
+            if (_permissionResetTask is
+                {
+                    IsCompleted: true,
+                    IsCompletedSuccessfully: false
+                })
+            {
+                _permissionResetTask = null;
+            }
+
             ShowFailure("The secure browser could not start. Install or repair Microsoft Edge WebView2, then reconnect.");
         }
     }
 
     public bool ShowChat()
     {
+        _presentationGeneration++;
         _keepConnectedWhenHidden = true;
+        _isPresentedToUser = true;
+        Opacity = 1;
+        IsHitTestVisible = true;
         Visibility = Visibility.Visible;
         if (_securityClosed)
         {
@@ -172,8 +272,12 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
 
     public void HideChat(bool keepConnected)
     {
+        var presentationGeneration = ++_presentationGeneration;
         _keepConnectedWhenHidden = keepConnected;
-        Visibility = Visibility.Collapsed;
+        _isPresentedToUser = false;
+        Opacity = 1;
+        IsHitTestVisible = false;
+        Visibility = Visibility.Hidden;
         if (StopActiveMediaIfNeeded())
         {
             return;
@@ -186,8 +290,22 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
         }
         else
         {
-            _ = SuspendWhenHiddenAsync();
+            _ = SuspendWhenHiddenAsync(presentationGeneration);
         }
+    }
+
+    public void PrepareForBackgroundInitialization(bool keepConnected)
+    {
+        _presentationGeneration++;
+        _keepConnectedWhenHidden = keepConnected;
+        _isPresentedToUser = false;
+        IsHitTestVisible = false;
+        Opacity = 1;
+
+        // Hidden participates in layout and remains connected to the window,
+        // unlike Collapsed. WebView2 can therefore create a correctly sized,
+        // non-painting controller for a background account.
+        Visibility = Visibility.Hidden;
     }
 
     public async Task ClearSessionAsync()
@@ -248,13 +366,9 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
         _disposed = true;
         _notificationFallbackTimer.Stop();
         _account.PropertyChanged -= OnAccountPropertyChanged;
-        if (_eventsAttached && Browser.CoreWebView2 is not null)
-        {
-            DetachEvents(Browser.CoreWebView2);
-            _eventsAttached = false;
-        }
-
-        Browser.Dispose();
+        ObserveBackgroundFailure(_browserInitializationTask);
+        ObserveBackgroundFailure(_permissionResetTask);
+        DisposeBrowserController();
         GC.SuppressFinalize(this);
     }
 
@@ -318,6 +432,7 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
         core.RemoveWebResourceRequestedFilter(
             "*",
             CoreWebView2WebResourceContext.Document);
+        _navigationTracker.Reset();
 
         foreach (var frame in _frames.ToArray())
         {
@@ -331,6 +446,7 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
     {
         if (!SteamNavigationPolicy.IsAllowedEmbeddedDocument(e.Uri))
         {
+            _navigationTracker.RecordHostCancellation(e.NavigationId);
             e.Cancel = true;
             if (SteamNavigationPolicy.ShouldPromptForExternalLink(
                     e.Uri,
@@ -342,11 +458,16 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
             return;
         }
 
+        _navigationTracker.RecordAllowedNavigation(e.NavigationId);
+
         if (SteamNavigationPolicy.IsBootstrapDocument(e.Uri))
         {
             return;
         }
 
+        Browser.Visibility = Visibility.Hidden;
+        LoadingOverlay.Visibility = Visibility.Visible;
+        ErrorOverlay.Visibility = Visibility.Collapsed;
         _account.ConnectionState = ChatConnectionState.Reconnecting;
     }
 
@@ -354,38 +475,47 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
         object? sender,
         CoreWebView2NavigationCompletedEventArgs e)
     {
+        if (!_navigationTracker.ShouldHandleCompletion(e.NavigationId))
+        {
+            return;
+        }
+
         if (Browser.Source is not { } source
             || !SteamNavigationPolicy.IsAllowedEmbeddedDocument(source.AbsoluteUri))
         {
-            ShowFailure("The Steam page was blocked or could not load. Check your connection and reconnect.");
+            ShowNavigationFailure(
+                "The Steam page was blocked or could not load. Check your connection and reconnect.");
             return;
         }
 
         if (SteamNavigationPolicy.IsBootstrapDocument(source.AbsoluteUri))
         {
+            Browser.Visibility = Visibility.Hidden;
             LoadingOverlay.Visibility = Visibility.Visible;
             _account.ConnectionState = ChatConnectionState.Starting;
             return;
         }
         if (!e.IsSuccess)
         {
-            ShowFailure("The Steam page was blocked or could not load. Check your connection and reconnect.");
+            ShowNavigationFailure(
+                "The Steam page was blocked or could not load. Check your connection and reconnect.");
             return;
         }
 
         LoadingOverlay.Visibility = Visibility.Collapsed;
         ErrorOverlay.Visibility = Visibility.Collapsed;
+        Browser.Visibility = Visibility.Visible;
         _account.ConnectionState = SteamNavigationPolicy.IsLoginDocument(source)
             ? ChatConnectionState.SignInRequired
             : ChatConnectionState.Ready;
         if (_account.ConnectionState == ChatConnectionState.Ready
-            && Visibility == Visibility.Visible)
+            && _isPresentedToUser)
         {
             ChatReadyWhileVisible?.Invoke(this, EventArgs.Empty);
         }
-        if (!_keepConnectedWhenHidden && Visibility != Visibility.Visible)
+        if (!_keepConnectedWhenHidden && !_isPresentedToUser)
         {
-            _ = SuspendWhenHiddenAsync();
+            _ = SuspendWhenHiddenAsync(_presentationGeneration);
         }
     }
 
@@ -661,27 +791,53 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
 
     private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)
     {
+        _initializationFailed = true;
         ShowFailure("The Steam Chat browser stopped unexpectedly. Reconnect to continue.");
+    }
+
+    private static void ObserveBackgroundFailure(Task? task)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        if (task.IsFaulted)
+        {
+            _ = task.Exception;
+            return;
+        }
+
+        if (task.IsCompleted)
+        {
+            return;
+        }
+
+        _ = task.ContinueWith(
+            static completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously
+                | TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
     }
 
     private async void OnReconnectClicked(object sender, RoutedEventArgs e)
     {
-        if (_securityClosed)
+        if (_securityClosed || _initializationFailed)
         {
-            ShowFailure(
-                "This browser was closed to protect microphone privacy. Restart Switchboard to reopen it.");
+            ReconnectSessionRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 
         ErrorOverlay.Visibility = Visibility.Collapsed;
         LoadingOverlay.Visibility = Visibility.Visible;
+        Browser.Visibility = Visibility.Hidden;
         _account.ConnectionState = ChatConnectionState.Reconnecting;
 
         try
         {
-            if (Browser.CoreWebView2 is null)
+            if (!_configured)
             {
-                _initialized = false;
                 await InitializeAsync();
             }
             else
@@ -696,10 +852,14 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
         }
     }
 
-    private async Task SuspendWhenHiddenAsync()
+    private async Task SuspendWhenHiddenAsync(long presentationGeneration)
     {
         var core = Browser.CoreWebView2;
-        if (core is null || _disposed)
+        if (core is null
+            || _disposed
+            || presentationGeneration != _presentationGeneration
+            || _isPresentedToUser
+            || _keepConnectedWhenHidden)
         {
             return;
         }
@@ -712,7 +872,26 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
 
         try
         {
-            _account.IsSleeping = await core.TrySuspendAsync();
+            var suspended = await core.TrySuspendAsync();
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (presentationGeneration != _presentationGeneration
+                || _isPresentedToUser
+                || _keepConnectedWhenHidden)
+            {
+                _account.IsSleeping = false;
+                if (suspended || core.IsSuspended)
+                {
+                    core.Resume();
+                }
+
+                return;
+            }
+
+            _account.IsSleeping = suspended;
         }
         catch (Exception exception) when (
             exception is COMException or InvalidOperationException)
@@ -842,13 +1021,13 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
             }
 
             _microphonePermissionRequested = false;
-            if (_keepConnectedWhenHidden || Visibility == Visibility.Visible)
+            if (_keepConnectedWhenHidden || _isPresentedToUser)
             {
                 core.Navigate(ChatUri.AbsoluteUri);
             }
             else
             {
-                await SuspendWhenHiddenAsync();
+                await SuspendWhenHiddenAsync(_presentationGeneration);
             }
         }
         catch (Exception exception) when (
@@ -906,15 +1085,39 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
     {
         _securityClosed = true;
         _notificationFallbackTimer.Stop();
-        if (_eventsAttached && Browser.CoreWebView2 is { } core)
+        DisposeBrowserController();
+        ShowFailure(
+            "This workspace was closed because its microphone session could not be ended safely. Choose Reconnect to create a fresh workspace.");
+    }
+
+    private void DisposeBrowserController()
+    {
+        try
         {
-            DetachEvents(core);
+            if (_eventsAttached && Browser.CoreWebView2 is { } core)
+            {
+                DetachEvents(core);
+            }
+        }
+        catch (Exception exception) when (
+            exception is COMException or InvalidOperationException)
+        {
+            // Controller teardown remains best effort after runtime failure.
+        }
+        finally
+        {
             _eventsAttached = false;
         }
 
-        Browser.Dispose();
-        ShowFailure(
-            "This workspace was closed because its microphone session could not be ended safely. Restart Switchboard to reconnect.");
+        try
+        {
+            Browser.Dispose();
+        }
+        catch (Exception exception) when (
+            exception is COMException or InvalidOperationException)
+        {
+            // A failed browser process may already have released the controller.
+        }
     }
 
     private static async Task ResetPersistedPermissionsAsync(
@@ -956,16 +1159,26 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
     }
 
     private bool IsWorkspaceVisible() =>
-        IsVisible
-        && Visibility == Visibility.Visible
+        _isPresentedToUser
+        && Opacity > 0
+        && IsVisible
+        && Browser.Visibility == Visibility.Visible
+        && _account.ConnectionState == ChatConnectionState.Ready
         && Window.GetWindow(this)?.IsActive == true;
 
     private void ShowFailure(string message)
     {
         _account.ConnectionState = ChatConnectionState.Failed;
+        Browser.Visibility = Visibility.Hidden;
         LoadingOverlay.Visibility = Visibility.Collapsed;
         ErrorMessage.Text = message;
         ErrorOverlay.Visibility = Visibility.Visible;
+    }
+
+    private void ShowNavigationFailure(string message)
+    {
+        _ = StopActiveMediaIfNeeded();
+        ShowFailure(message);
     }
 
     private void OpenExternalWithConfirmation(string? rawUri)

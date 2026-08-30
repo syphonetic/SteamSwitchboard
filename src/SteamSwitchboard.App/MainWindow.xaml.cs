@@ -20,8 +20,10 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly AppPaths _paths;
     private readonly GameLaunchService _launcher;
+    private readonly Func<AccountViewModel, string, SteamChatSession> _chatSessionFactory;
     private readonly Dictionary<Guid, SteamChatSession> _chatSessions = [];
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly CancellationToken _lifetimeToken;
     private readonly DispatcherTimer _playAccountTimer;
     private readonly DispatcherTimer _balloonReleaseTimer;
     private readonly System.Windows.Forms.NotifyIcon _notificationIcon;
@@ -32,15 +34,30 @@ public partial class MainWindow : Window
     private bool _isLoaded;
     private bool _suppressSelectionEvents;
 
+    internal event Action<AccountViewModel>? ChatSessionInitializationStarted;
+
     public MainWindow(
         MainViewModel viewModel,
         AppPaths paths,
         GameLaunchService launcher)
+        : this(viewModel, paths, launcher, null)
+    {
+    }
+
+    internal MainWindow(
+        MainViewModel viewModel,
+        AppPaths paths,
+        GameLaunchService launcher,
+        Func<AccountViewModel, string, SteamChatSession>? chatSessionFactory)
     {
         InitializeComponent();
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         _launcher = launcher ?? throw new ArgumentNullException(nameof(launcher));
+        _chatSessionFactory = chatSessionFactory
+            ?? (static (account, browserData) =>
+                new SteamChatSession(account, browserData));
+        _lifetimeToken = _lifetime.Token;
         DataContext = _viewModel;
         DataFolderText.Text = _paths.Root;
         WindowSizing.ClampToCurrentWorkArea(this, 32);
@@ -72,20 +89,20 @@ public partial class MainWindow : Window
         }
 
         _startupStarted = true;
-        RootLayout.IsEnabled = false;
+        _suppressSelectionEvents = true;
         try
         {
-            await _viewModel.InitializeAsync(_lifetime.Token);
+            await _viewModel.InitializeAsync(_lifetimeToken, refreshGames: false);
+            var restoredAccount = _viewModel.SelectedAccount;
+            await Dispatcher.Yield(DispatcherPriority.ContextIdle);
+            _viewModel.SelectedAccount = restoredAccount;
+            AccountList.SelectedItem = restoredAccount;
             ApplyNotificationSettings();
-            await ResumePendingProfileDeletionsAsync();
-            ShowSelectedChat();
-            await InitializeChatSessionsAsync();
-            UpdateCurrentPlayAccount();
-            _playAccountTimer.Start();
         }
         catch (OperationCanceledException)
         {
             // Normal during app shutdown.
+            return;
         }
         catch (Exception exception)
         {
@@ -95,11 +112,62 @@ public partial class MainWindow : Window
                 "SteamSwitchboard could not finish starting",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
+            return;
         }
         finally
         {
+            _suppressSelectionEvents = false;
             _isLoaded = true;
-            RootLayout.IsEnabled = true;
+        }
+
+        ShowSelectedChat();
+        UpdateCurrentPlayAccount();
+        _playAccountTimer.Start();
+
+        // Let WPF render an enabled, interactive shell before creating any
+        // heavyweight browser controllers. Individual workspaces report their
+        // own progress and cannot lock navigation or settings.
+        await Dispatcher.Yield(DispatcherPriority.Background);
+        var gameRefreshTask = RefreshGamesAfterStartupAsync();
+        try
+        {
+            await ResumePendingProfileDeletionsAsync();
+            await InitializeChatSessionsAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal during app shutdown.
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException
+                or COMException)
+        {
+            _viewModel.StatusMessage =
+                $"One or more chat workspaces need attention: {exception.Message}";
+        }
+
+        await gameRefreshTask;
+    }
+
+    private async Task RefreshGamesAfterStartupAsync()
+    {
+        try
+        {
+            await _viewModel.RefreshGamesAsync(_lifetimeToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal during app shutdown.
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or InvalidDataException)
+        {
+            _viewModel.StatusMessage =
+                "Steam games could not be refreshed. Chats and settings are still available.";
         }
     }
 
@@ -110,26 +178,41 @@ public partial class MainWindow : Window
             && !_viewModel.IsAccountDeletionPending(selected.Id))
         {
             await EnsureChatSessionAsync(selected);
+            _lifetimeToken.ThrowIfCancellationRequested();
         }
 
         if (_viewModel.KeepAllChatsLive)
         {
-            foreach (var account in _viewModel.Accounts)
+            var backgroundAccounts = _viewModel.Accounts
+                .Where(account =>
+                    !ReferenceEquals(account, selected)
+                    && !_viewModel.IsAccountDeletionPending(account.Id))
+                .Take(Math.Max(
+                    0,
+                    MaximumSimultaneousChatSessions - _chatSessions.Count))
+                .ToArray();
+            foreach (var account in backgroundAccounts)
             {
-                _lifetime.Token.ThrowIfCancellationRequested();
-                if (ReferenceEquals(account, selected)
-                    || _viewModel.IsAccountDeletionPending(account.Id))
+                _lifetimeToken.ThrowIfCancellationRequested();
+                if (!_viewModel.KeepAllChatsLive)
                 {
-                    continue;
+                    break;
                 }
 
-                if (_chatSessions.Count >= MaximumSimultaneousChatSessions)
-                {
-                    account.ConnectionState = ChatConnectionState.Dormant;
-                    continue;
-                }
-
+                // Controller creation must happen on the UI thread. Starting
+                // one at a time and yielding at input-safe boundaries prevents
+                // a burst of background profiles from monopolising WPF.
+                await Dispatcher.Yield(DispatcherPriority.Background);
                 await EnsureChatSessionAsync(account);
+                _lifetimeToken.ThrowIfCancellationRequested();
+            }
+
+            _lifetimeToken.ThrowIfCancellationRequested();
+            foreach (var account in _viewModel.Accounts.Where(account =>
+                         !_chatSessions.ContainsKey(account.Id)
+                         && !_viewModel.IsAccountDeletionPending(account.Id)))
+            {
+                account.ConnectionState = ChatConnectionState.Dormant;
             }
 
             if (_viewModel.Accounts.Count > 1)
@@ -171,6 +254,16 @@ public partial class MainWindow : Window
 
         if (_chatSessions.TryGetValue(account.Id, out var existing))
         {
+            if (forProfileCleanup)
+            {
+                await existing.InitializeForCleanupAsync();
+            }
+            else
+            {
+                await existing.InitializeAsync();
+                ShowSelectedChat();
+            }
+
             return existing;
         }
 
@@ -179,12 +272,29 @@ public partial class MainWindow : Window
             ReleaseLeastRecentlyUsedSession(account.Id);
         }
 
-        var session = new SteamChatSession(account, _paths.BrowserData);
+        var session = _chatSessionFactory(account, _paths.BrowserData);
         session.ChatNotificationReceived += OnChatNotificationReceived;
         session.ChatReadyWhileVisible += OnChatReadyWhileVisible;
-        session.HideChat(_viewModel.KeepAllChatsLive);
+        session.ReconnectSessionRequested += OnReconnectSessionRequested;
         _chatSessions.Add(account.Id, session);
         ChatSessionContainer.Children.Add(session);
+        if (!forProfileCleanup
+            && _viewModel.SelectedSection == AppSection.Chats
+            && ReferenceEquals(_viewModel.SelectedAccount, account))
+        {
+            session.ShowChat();
+        }
+        else
+        {
+            session.PrepareForBackgroundInitialization(
+                _viewModel.KeepAllChatsLive);
+        }
+
+        // WebView2 needs a connected WPF visual before explicit
+        // initialization. This yield also prevents a browser launch from
+        // monopolising the input event that selected the account.
+        await Dispatcher.Yield(DispatcherPriority.Loaded);
+        ChatSessionInitializationStarted?.Invoke(account);
         if (forProfileCleanup)
         {
             await session.InitializeForCleanupAsync();
@@ -232,13 +342,14 @@ public partial class MainWindow : Window
         ChatSessionContainer.Children.Remove(session);
         session.ChatNotificationReceived -= OnChatNotificationReceived;
         session.ChatReadyWhileVisible -= OnChatReadyWhileVisible;
+        session.ReconnectSessionRequested -= OnReconnectSessionRequested;
     }
 
     private async Task ResumePendingProfileDeletionsAsync()
     {
         foreach (var account in _viewModel.AccountsPendingBrowserProfileDeletion.ToArray())
         {
-            _lifetime.Token.ThrowIfCancellationRequested();
+            _lifetimeToken.ThrowIfCancellationRequested();
             try
             {
                 await CompletePendingProfileDeletionAsync(account);
@@ -270,7 +381,7 @@ public partial class MainWindow : Window
             _suppressSelectionEvents = true;
             try
             {
-                await _viewModel.RemoveAccountAsync(account, _lifetime.Token);
+                await _viewModel.RemoveAccountAsync(account, _lifetimeToken);
             }
             finally
             {
@@ -315,6 +426,11 @@ public partial class MainWindow : Window
 
     private async void OnAddAccountClicked(object sender, RoutedEventArgs e)
     {
+        if (!EnsureStartupComplete())
+        {
+            return;
+        }
+
         var dialog = new AddAccountWindow(_viewModel.Accounts.Select(account => account.Profile))
         {
             Owner = this
@@ -327,7 +443,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var account = await _viewModel.AddAccountAsync(dialog.Result, _lifetime.Token);
+            var account = await _viewModel.AddAccountAsync(dialog.Result, _lifetimeToken);
             NavigateTo(AppSection.Chats);
             await EnsureChatSessionAsync(account);
             ShowSelectedChat();
@@ -347,7 +463,8 @@ public partial class MainWindow : Window
 
     private async void OnRenameAccountClicked(object sender, RoutedEventArgs e)
     {
-        if (_viewModel.SelectedAccount is not { } account)
+        if (!EnsureStartupComplete()
+            || _viewModel.SelectedAccount is not { } account)
         {
             return;
         }
@@ -368,7 +485,7 @@ public partial class MainWindow : Window
             await _viewModel.RenameAccountAsync(
                 account,
                 dialog.ResultName,
-                _lifetime.Token);
+                _lifetimeToken);
         }
         catch (Exception exception) when (
             exception is ArgumentException
@@ -406,7 +523,7 @@ public partial class MainWindow : Window
 
         try
         {
-            await _viewModel.SaveAsync(_lifetime.Token);
+            await _viewModel.SaveAsync(_lifetimeToken);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or OperationCanceledException)
@@ -443,6 +560,17 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool EnsureStartupComplete()
+    {
+        if (_isLoaded)
+        {
+            return true;
+        }
+
+        _viewModel.StatusMessage = "Finishing startup…";
+        return false;
+    }
+
     private void SetNavStyle(Button button, bool isSelected)
     {
         button.Style = (Style)FindResource(isSelected ? "SecondaryButton" : "QuietButton");
@@ -450,11 +578,16 @@ public partial class MainWindow : Window
 
     private async void OnRefreshGamesClicked(object sender, RoutedEventArgs e)
     {
+        if (!EnsureStartupComplete())
+        {
+            return;
+        }
+
         _viewModel.IsBusy = true;
         _viewModel.StatusMessage = "Refreshing the Steam library…";
         try
         {
-            await _viewModel.RefreshGamesAsync(_lifetime.Token);
+            await _viewModel.RefreshGamesAsync(_lifetimeToken);
             _viewModel.StatusMessage = $"Found {_viewModel.Games.Count} installed games";
         }
         catch (OperationCanceledException)
@@ -478,7 +611,7 @@ public partial class MainWindow : Window
 
         try
         {
-            await _viewModel.SaveAsync(_lifetime.Token);
+            await _viewModel.SaveAsync(_lifetimeToken);
             if (_viewModel.SelectedPlayAccount is { } account)
             {
                 _viewModel.StatusMessage = $"Games will launch with {account.DisplayName} selected";
@@ -505,7 +638,7 @@ public partial class MainWindow : Window
 
         try
         {
-            await _viewModel.SaveAsync(_lifetime.Token);
+            await _viewModel.SaveAsync(_lifetimeToken);
             ApplyNotificationSettings();
             if (_viewModel.KeepAllChatsLive)
             {
@@ -532,7 +665,8 @@ public partial class MainWindow : Window
 
     private void OnPlayClicked(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { Tag: InstalledGame game }
+        if (!EnsureStartupComplete()
+            || sender is not Button { Tag: InstalledGame game }
             || _viewModel.SelectedPlayAccount is not { } account)
         {
             return;
@@ -590,6 +724,11 @@ public partial class MainWindow : Window
 
     private async void OnBrowseSteamClicked(object sender, RoutedEventArgs e)
     {
+        if (!EnsureStartupComplete())
+        {
+            return;
+        }
+
         var dialog = new OpenFileDialog
         {
             Title = "Choose Steam",
@@ -618,8 +757,8 @@ public partial class MainWindow : Window
         _viewModel.SteamExecutablePath = validatedSteam;
         try
         {
-            await _viewModel.SaveAsync(_lifetime.Token);
-            await _viewModel.RefreshGamesAsync(_lifetime.Token);
+            await _viewModel.SaveAsync(_lifetimeToken);
+            await _viewModel.RefreshGamesAsync(_lifetimeToken);
             _viewModel.StatusMessage = "Steam location updated";
         }
         catch (Exception exception) when (
@@ -659,7 +798,8 @@ public partial class MainWindow : Window
 
     private async void OnForgetAccountClicked(object sender, RoutedEventArgs e)
     {
-        if (_viewModel.SelectedAccount is not { } account)
+        if (!EnsureStartupComplete()
+            || _viewModel.SelectedAccount is not { } account)
         {
             return;
         }
@@ -680,7 +820,7 @@ public partial class MainWindow : Window
 
         try
         {
-            await _viewModel.MarkAccountDeletionPendingAsync(account, _lifetime.Token);
+            await _viewModel.MarkAccountDeletionPendingAsync(account, _lifetimeToken);
             _viewModel.ClearNotifications(account.Id);
             PurgeWindowsNotifications(account.Id);
             await CompletePendingProfileDeletionAsync(account);
@@ -825,6 +965,38 @@ public partial class MainWindow : Window
             && CanMarkSelectedChatRead(session.Account.Id))
         {
             MarkAccountRead(session.Account);
+        }
+    }
+
+    private async void OnReconnectSessionRequested(object? sender, EventArgs e)
+    {
+        if (sender is not SteamChatSession session
+            || !_chatSessions.TryGetValue(session.Account.Id, out var tracked)
+            || !ReferenceEquals(session, tracked)
+            || _viewModel.IsAccountDeletionPending(session.Account.Id))
+        {
+            return;
+        }
+
+        var account = session.Account;
+        ReleaseChatSession(session, markDormant: false);
+        try
+        {
+            await EnsureChatSessionAsync(account);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal during app shutdown.
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException
+                or COMException)
+        {
+            account.ConnectionState = ChatConnectionState.Failed;
+            _viewModel.StatusMessage =
+                "That chat workspace could not be recreated. Restart Switchboard and try again.";
         }
     }
 
@@ -1073,6 +1245,7 @@ public partial class MainWindow : Window
         {
             session.ChatNotificationReceived -= OnChatNotificationReceived;
             session.ChatReadyWhileVisible -= OnChatReadyWhileVisible;
+            session.ReconnectSessionRequested -= OnReconnectSessionRequested;
             session.Dispose();
         }
 

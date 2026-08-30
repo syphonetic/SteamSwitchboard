@@ -194,6 +194,8 @@ try {
             '--skip-dirs', 'src/SteamSwitchboard.App/obj',
             '--skip-dirs', 'tests/SteamSwitchboard.Tests/bin',
             '--skip-dirs', 'tests/SteamSwitchboard.Tests/obj',
+            '--skip-dirs', 'tests/SteamSwitchboard.UiRegression/bin',
+            '--skip-dirs', 'tests/SteamSwitchboard.UiRegression/obj',
             '--skip-dirs', 'artifacts',
             '.'
         )

@@ -4,7 +4,7 @@ Validation is split into deterministic automated checks, adversarial release tes
 
 ## Automated suite
 
-The Release suite contains **125 passing tests** covering:
+The Release suite contains **131 passing tests** covering:
 
 - VDF comments, escapes, bare tokens, malformed objects, duplicate keys, exact/over-limit tokens, file-size limits, depth limits, and cancellation;
 - Unicode normalisation, control/bidirectional-character rejection, Steam-login syntax, duplicate login/profile IDs, and colour validation;
@@ -14,9 +14,9 @@ The Release suite contains **125 passing tests** covering:
 - Steam library discovery, remote-library rejection, malformed manifests, filename/AppID mismatch, install-path traversal, and untrusted display-name sanitisation;
 - valid individual SteamID64 parsing, duplicate login-name rejection, invalid cached identity rejection, persona sanitisation, signed-out/unknown fail-closed behaviour, and authoritative active-account matching;
 - every launch-policy state, exact process arguments, temporally separated stable SteamID/process checks, unknown/mismatched accounts, untrusted executables, a changed process identity, and an executable that changes after assessment;
-- exact Steam Chat/login navigation routes, host/path/port/userinfo/lookalike rejection, URI length limits, direct-user external-link gating, visible user-initiated microphone policy, exact-origin notification acceptance, raw notification-size rejection, replacement/fallback lifecycle, hostile notification-text sanitisation, and untrusted-origin rejection;
+- exact Steam Chat/login navigation routes, host/path/port/userinfo/lookalike rejection, URI length limits, host-cancelled/stale navigation-completion suppression, direct-user external-link gating, visible user-initiated microphone policy, exact-origin notification acceptance, raw notification-size rejection, replacement/fallback lifecycle, hostile notification-text sanitisation, and untrusted-origin rejection;
 - privacy-safe log records, bounded rotation, and single-instance mutual exclusion; and
-- selection/removal regressions, cleanup marker lifecycle, corrupt-state warning retention, truthful open/sleep/dormant status wording, persisted-setting binding refresh, account-scoped unread state, preview redaction, bounded/non-persistent notification history, game filtering, and WPF-dispatcher collection transitions.
+- selection/removal regressions, cleanup marker lifecycle, corrupt-state warning retention, truthful open/sleep/dormant status wording, persisted-setting binding refresh, account-scoped unread state, preview redaction, bounded/non-persistent notification history, game filtering, WPF-dispatcher collection transitions, and physical window clamping for scaled, negative-coordinate, and already-visible monitor layouts.
 
 The ordinary gate runs a disposable empty-cache signer-policy restore followed by normal signed-source/locked NuGet restore, formatting verification, deterministic Release compilation, warnings-as-errors, .NET security diagnostics as errors, and all tests.
 
@@ -27,7 +27,7 @@ The checked-in GitHub workflow adds a mandatory Ubuntu scanner job with pinned S
 On 2026-08-30:
 
 - `dotnet list package --vulnerable --include-transitive --format json`: **0 vulnerable package records**;
-- Semgrep community C# + security-audit configuration: **179 rules, 58 files, 0 findings**;
+- Semgrep community C# + security-audit configuration: **180 rules, 63 files, 0 findings**;
 - Trivy filesystem vulnerability/secret/misconfiguration scan at High/Critical: **0 vulnerabilities, 0 secrets, and no recognised configuration files**; and
 - Release and test NuGet lock files: **0 known vulnerabilities**, with package-source mapping, repository-signature validation, and an exact pinned Microsoft author certificate for the one legacy package that predates repository countersigning.
 
@@ -61,6 +61,7 @@ Observed during this pass:
 
 - The installed `steam.exe` produced a valid Windows trust result and exact publisher name `Valve Corp.`; an unsigned fixture was rejected.
 - The normal-privilege app started without clipping at 144-DPI, exposed the expected title and 48×48 associated icon, detected 58 installed applications, and settled into the beginner first-run state.
+- The repeatable `scripts/test-ui-regression.ps1` harness created two disposable profiles, forced the selected profile's first browser initialization to time out, activated the visible Reconnect action, and proved a fresh session recovered. It also proved the shell enabled and accepted Chats/Settings navigation within one second, selected-before-background browser startup ordering, a physical window wholly inside its 3840×2088 work area, both profiles leaving the bounded starting state, and a **0.11%** near-white pixel ratio in the real composed account sidebar. That HWND-level pixel assertion detects the reported white WebView overpaint; all disposable browser data and processes were removed afterwards. The harness project is compiled by the normal/CI solution gate, while its composed-screen run is intentionally a documented interactive-Windows check rather than a headless CI step.
 - The self-contained 1.0.0 ZIP passed checksum, pre-extraction path validation, version/icon/no-PDB/no-session-data assertions, and adversarial validator tests.
 - A baseline packaged process remained healthy through startup, then closed normally. Its disposable extraction and test-data directories were removed, with zero processes remaining. The final feature package was not process-smoked on this host because an older user-owned SteamSwitchboard instance and its real `%LOCALAPPDATA%` state were deliberately left untouched; the exact final ZIP instead receives deterministic WPF rendering plus static and adversarial package validation.
 - A final screenshot was captured from a disposable empty-state render with startup discovery disabled; it contains no account, installed-game, QR, conversation, or credential data.
@@ -81,7 +82,8 @@ Three read-only reviews separately examined browser/session isolation, native/lo
 - notification duplicate/lifecycle/flood gaps and identity-free legacy balloon callbacks → tag replacement, correlated fallback, deferred click/close reporting, raw bounds, local/global circuit breakers, and generic notification-center activation instead of timer-slot account inference;
 - UNC/reparse/traversal and unbounded Steam metadata → local-path policy plus parser/path/identity limits;
 - duplicate state IDs, unbounded account activation, and quadratic validation → 512 saved-profile/16 live-session budgets, lazy LRU activation, and linear identity validation;
-- persisted-setting/startup-event and constrained-layout defects → binding refresh, startup interaction suppression, adaptive scrolling/resizing, truthful native states, and login-disambiguated accessibility names;
+- persisted-setting/startup-event and constrained-layout defects → binding settle before event enablement, an interactive shell before browser startup, selected-visible/background-hidden WebView layout, bounded serial profile warm-up, per-monitor native bounds clamping, adaptive scrolling/resizing, truthful native states, and login-disambiguated accessibility names;
+- cancelled/stale navigation, hidden-media, delayed-suspension, missing-runtime, and retry defects → navigation-ID correlation, media teardown on genuine failure, presentation-generation rechecks, account-scoped runtime/folder errors, idempotent event attachment, and fresh-session reconnect;
 - clean-runner signer/test nondeterminism → exact legacy author certificate, empty-cache restore with metadata reset, and STA Dispatcher-hosted ViewModel initialization tests; and
 - report-only release checks → enforced archive assertions, malicious fixtures, signed NuGet policy, static scanners, and deterministic ZIP metadata.
 
@@ -101,7 +103,7 @@ Reviewed all filesystem probes before use, Steam signer/process-ID/start-time/St
 
 ### Pass 3 — release, usability, and residual-risk honesty
 
-Reviewed beginner flow, constrained/high-DPI layout, settings restoration, disambiguated accessibility labels, unsigned-build messaging, exact version propagation, clean-cache dependency trust, scanner results, ZIP construction, pre-extraction validation, adversarial fixtures, smoke-test boundary, cleanup, and documentation. The unsigned-development, 16-live-session, native-Steam, and web-identity limitations are prominent rather than hidden.
+Reviewed beginner flow, responsive browser startup, real composed HWND layering, constrained/high-DPI layout and monitor clamping, settings restoration, disambiguated accessibility labels, unsigned-build messaging, exact version propagation, clean-cache dependency trust, scanner results, ZIP construction, pre-extraction validation, adversarial fixtures, smoke-test boundary, cleanup, and documentation. The unsigned-development, 16-live-session, native-Steam, and web-identity limitations are prominent rather than hidden.
 
 **Assessment:** happy with the release and user-trust boundary as a world-class development product.
 
