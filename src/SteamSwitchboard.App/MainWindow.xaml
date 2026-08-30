@@ -1,0 +1,693 @@
+<Window x:Class="SteamSwitchboard.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:viewModels="clr-namespace:SteamSwitchboard.ViewModels"
+        Title="SteamSwitchboard — unofficial Steam companion"
+        Icon="{StaticResource AppIcon}"
+        Width="1240"
+        Height="800"
+        MinWidth="900"
+        MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        Loaded="OnWindowLoaded"
+        Closing="OnWindowClosing">
+    <Window.Resources>
+        <Style x:Key="PageStyle" TargetType="Grid">
+            <Setter Property="Visibility" Value="Collapsed" />
+        </Style>
+        <Style x:Key="ChatsPageStyle" TargetType="Grid" BasedOn="{StaticResource PageStyle}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding SelectedSection}" Value="{x:Static viewModels:AppSection.Chats}">
+                    <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="GamesPageStyle" TargetType="Grid" BasedOn="{StaticResource PageStyle}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding SelectedSection}" Value="{x:Static viewModels:AppSection.Games}">
+                    <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="SettingsPageStyle" TargetType="Grid" BasedOn="{StaticResource PageStyle}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding SelectedSection}" Value="{x:Static viewModels:AppSection.Settings}">
+                    <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="EmptyWhenTrue" TargetType="FrameworkElement">
+            <Setter Property="Visibility" Value="Visible" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding HasAccounts}" Value="True">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="GameEmptyState" TargetType="FrameworkElement">
+            <Setter Property="Visibility" Value="Visible" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding HasGames}" Value="True">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="AccountListItem" TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0,2" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusStyle}" />
+            <Setter Property="AutomationProperties.Name" Value="{Binding DisplayName}" />
+            <Setter Property="AutomationProperties.HelpText" Value="{Binding StatusText}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="ItemBorder"
+                                Padding="10"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="10">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="#142439" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="#1B3047" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid Background="{StaticResource BackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="68" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="34" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Background="#0B1624"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="0,0,0,1">
+            <Grid Margin="22,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="285" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="38" Height="38" Background="{StaticResource AccentStrongBrush}" CornerRadius="11">
+                        <TextBlock HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontSize="20"
+                                   FontWeight="Bold"
+                                   Foreground="White"
+                                   Text="S" />
+                    </Border>
+                    <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                        <TextBlock FontSize="17" FontWeight="SemiBold" Text="SteamSwitchboard" />
+                        <TextBlock Style="{StaticResource MutedText}" FontSize="11" Text="UNOFFICIAL COMPANION" />
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1"
+                            Margin="12,0,0,0"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button x:Name="ChatsNavButton"
+                            Width="94"
+                            Margin="0,0,6,0"
+                            Content="Chats"
+                            Click="OnChatsNavClicked"
+                            Style="{StaticResource SecondaryButton}" />
+                    <Button x:Name="GamesNavButton"
+                            Width="94"
+                            Margin="0,0,6,0"
+                            Content="Games"
+                            Click="OnGamesNavClicked"
+                            Style="{StaticResource QuietButton}" />
+                    <Button x:Name="SettingsNavButton"
+                            Width="94"
+                            Content="Settings"
+                            Click="OnSettingsNavClicked"
+                            Style="{StaticResource QuietButton}" />
+                </StackPanel>
+
+                <Border Grid.Column="2"
+                        Padding="12,7"
+                        Background="#102738"
+                        BorderBrush="#24506B"
+                        BorderThickness="1"
+                        CornerRadius="16"
+                        VerticalAlignment="Center">
+                    <TextBlock Foreground="{StaticResource AccentBrush}"
+                               FontSize="12"
+                               Text="Passwords stay with Steam" />
+                </Border>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0"
+                    Background="#0B1624"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,0,1,0">
+                <Grid Margin="18">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock FontSize="15" FontWeight="SemiBold" Text="Your accounts" />
+                            <TextBlock Margin="0,3,0,0"
+                                       Style="{StaticResource MutedText}"
+                                       Text="No artificial profile limit" />
+                        </StackPanel>
+                        <Button Grid.Column="1"
+                                Width="42"
+                                Height="42"
+                                Padding="0"
+                                ToolTip="Add account"
+                                AutomationProperties.Name="Add account"
+                                AutomationProperties.AutomationId="SidebarAddAccount"
+                                Content="＋"
+                                Click="OnAddAccountClicked"
+                                Style="{StaticResource PrimaryButton}" />
+                    </Grid>
+
+                    <Grid Grid.Row="1" Margin="0,16,0,12">
+                        <ListBox x:Name="AccountList"
+                                 AutomationProperties.Name="Steam account workspaces"
+                                 ItemsSource="{Binding Accounts}"
+                                 SelectedItem="{Binding SelectedAccount, Mode=TwoWay}"
+                                 SelectionChanged="OnAccountSelectionChanged"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.VirtualizationMode="Recycling"
+                                 ItemContainerStyle="{StaticResource AccountListItem}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate DataType="{x:Type viewModels:AccountViewModel}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="44" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <Grid Width="38" Height="38" VerticalAlignment="Center">
+                                            <Border Background="{Binding AccentHex, Converter={StaticResource HexToBrushConverter}}"
+                                                    CornerRadius="19" />
+                                            <TextBlock HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       FontWeight="Bold"
+                                                       Foreground="#08111E"
+                                                       Text="{Binding Initial}" />
+                                            <Ellipse Width="10"
+                                                     Height="10"
+                                                     Margin="0,0,-1,-1"
+                                                     HorizontalAlignment="Right"
+                                                     VerticalAlignment="Bottom"
+                                                     Fill="{StaticResource SuccessBrush}"
+                                                     Stroke="#0B1624"
+                                                     StrokeThickness="2"
+                                                     ToolTip="Current Steam play account"
+                                                     Visibility="{Binding IsCurrentPlayAccount, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                        </Grid>
+
+                                        <StackPanel Grid.Column="1" Margin="10,0,6,0" VerticalAlignment="Center">
+                                            <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Margin="0,2,0,0"
+                                                       Style="{StaticResource MutedText}"
+                                                       FontSize="11"
+                                                       Text="{Binding StatusText}" />
+                                        </StackPanel>
+
+                                        <Border Grid.Column="2"
+                                                MinWidth="24"
+                                                Height="24"
+                                                Padding="6,0"
+                                                Background="{StaticResource AccentStrongBrush}"
+                                                CornerRadius="12"
+                                                VerticalAlignment="Center"
+                                                Visibility="{Binding HasUnread, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                            <TextBlock HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="11"
+                                                       FontWeight="Bold"
+                                                       Foreground="White"
+                                                       Text="{Binding UnreadLabel}" />
+                                        </Border>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <StackPanel Style="{StaticResource EmptyWhenTrue}"
+                                    Width="220"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    TextBlock.TextAlignment="Center">
+                            <TextBlock FontSize="32"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="＋" />
+                            <TextBlock Margin="0,12,0,0" FontWeight="SemiBold" Text="No accounts yet" />
+                            <TextBlock Margin="0,6,0,16"
+                                       Style="{StaticResource MutedText}"
+                                       Text="Add as many account workspaces as you need." />
+                            <Button Content="Add account"
+                                    Click="OnAddAccountClicked"
+                                    Style="{StaticResource PrimaryButton}" />
+                        </StackPanel>
+
+                        <Border Padding="30"
+                                Background="{StaticResource SurfaceBrush}"
+                                CornerRadius="12"
+                                Visibility="{Binding IsSelectedAccountPendingDeletion, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <StackPanel Width="430"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        TextBlock.TextAlignment="Center">
+                                <TextBlock FontSize="42" Text="⌛" />
+                                <TextBlock Margin="0,14,0,0"
+                                           FontSize="20"
+                                           FontWeight="SemiBold"
+                                           Text="Secure cleanup is still pending" />
+                                <TextBlock Margin="0,9,0,0"
+                                           Style="{StaticResource MutedText}"
+                                           TextWrapping="Wrap"
+                                           Text="Switchboard kept this account record so its Steam web session cannot be silently left behind. Restart the app to retry cleanup." />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <Border Grid.Row="2"
+                            Padding="12"
+                            Background="#0E1C2B"
+                            CornerRadius="9">
+                        <TextBlock Style="{StaticResource MutedText}"
+                                   FontSize="11"
+                                   Text="Each account uses a separate browser profile. Conversations and cookies are never merged." />
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Column="1" Margin="20">
+                <Grid Style="{StaticResource ChatsPageStyle}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Margin="4,0,4,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource HeadingText}" Text="Conversations" />
+                            <TextBlock Margin="0,5,0,0"
+                                       Style="{StaticResource MutedText}"
+                                       Text="Official Steam Friends &amp; Chat, one private session per account." />
+                        </StackPanel>
+
+                        <Border Grid.Column="1"
+                                Padding="14,9"
+                                Background="{StaticResource SurfaceBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                VerticalAlignment="Center"
+                                Visibility="{Binding HasSelectedAccount, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="9"
+                                         Height="9"
+                                         Margin="0,0,8,0"
+                                         Fill="{Binding SelectedAccount.AccentHex, Converter={StaticResource HexToBrushConverter}}" />
+                                <TextBlock Foreground="{StaticResource MutedTextBrush}" Text="Workspace " />
+                                <TextBlock FontWeight="SemiBold" Text="{Binding SelectedAccount.DisplayName}" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <Grid Grid.Row="1">
+                        <Border Background="{StaticResource SurfaceBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="12">
+                            <Grid x:Name="ChatSessionContainer" Margin="1" ClipToBounds="True" />
+                        </Border>
+
+                        <StackPanel Style="{StaticResource EmptyWhenTrue}"
+                                    Width="440"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    TextBlock.TextAlignment="Center">
+                            <TextBlock FontSize="54"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="⇄" />
+                            <TextBlock Margin="0,16,0,0"
+                                       FontSize="22"
+                                       FontWeight="SemiBold"
+                                       Text="All your conversations, one switch away" />
+                            <TextBlock Margin="0,10,0,22"
+                                       Style="{StaticResource MutedText}"
+                                       Text="Add an account, then sign in on Steam's own page. Switchboard never sees your password or Steam Guard code." />
+                            <Button Width="150"
+                                    Content="Add account"
+                                    Click="OnAddAccountClicked"
+                                    Style="{StaticResource PrimaryButton}" />
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+
+                <Grid Style="{StaticResource GamesPageStyle}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Margin="4,0,4,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource HeadingText}" Text="Installed games" />
+                            <TextBlock Margin="0,5,0,0"
+                                       Style="{StaticResource MutedText}"
+                                       Text="Switchboard verifies the active Steam account before every launch." />
+                        </StackPanel>
+                        <Button Grid.Column="1"
+                                MinWidth="120"
+                                Content="Refresh library"
+                                Click="OnRefreshGamesClicked"
+                                Style="{StaticResource SecondaryButton}" />
+                    </Grid>
+
+                    <Grid Grid.Row="1" Margin="4,0,4,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Width="360" HorizontalAlignment="Left">
+                            <TextBlock Margin="0,0,0,5"
+                                       Style="{StaticResource MutedText}"
+                                       FontSize="11"
+                                       Text="Search installed games" />
+                            <TextBox AutomationProperties.Name="Search installed games"
+                                     Text="{Binding GameSearch, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="Search by game name or App ID" />
+                        </StackPanel>
+                        <Border Grid.Column="1"
+                                Padding="14,9"
+                                Background="#102738"
+                                BorderBrush="#24506B"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                VerticalAlignment="Center"
+                                Visibility="{Binding HasSelectedAccount, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <TextBlock>
+                                <Run Foreground="{StaticResource MutedTextBrush}" Text="Play account: " />
+                                <Run FontWeight="SemiBold"
+                                     Foreground="{StaticResource AccentBrush}"
+                                     Text="{Binding SelectedAccount.DisplayName, Mode=OneWay}" />
+                            </TextBlock>
+                        </Border>
+                    </Grid>
+
+                    <Grid Grid.Row="2">
+                        <ListBox ItemsSource="{Binding GamesView}"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.VirtualizationMode="Recycling">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="Focusable" Value="False" />
+                                    <Setter Property="Margin" Value="0,0,0,8" />
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
+                                    <Setter Property="AutomationProperties.HelpText" Value="Installed Steam game" />
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <ContentPresenter />
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="16"
+                                            Background="{StaticResource SurfaceBrush}"
+                                            BorderBrush="{StaticResource BorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="11">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="54" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <Border Width="44"
+                                                    Height="44"
+                                                    Background="#20354B"
+                                                    CornerRadius="10">
+                                                <TextBlock HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Foreground="{StaticResource AccentBrush}"
+                                                           FontSize="18"
+                                                           FontWeight="Bold"
+                                                           Text="▶" />
+                                            </Border>
+
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                <TextBlock FontSize="15"
+                                                           FontWeight="SemiBold"
+                                                           Text="{Binding Name}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Margin="0,4,0,0" Style="{StaticResource MutedText}">
+                                                    <Run Text="App " />
+                                                    <Run Text="{Binding AppId, Mode=OneWay}" />
+                                                    <Run Text="  ·  " />
+                                                    <Run Text="{Binding SizeLabel, Mode=OneWay}" />
+                                                </TextBlock>
+                                            </StackPanel>
+
+                                            <Button Grid.Column="2"
+                                                    MinWidth="145"
+                                                    Tag="{Binding}"
+                                                    Click="OnPlayClicked"
+                                                    AutomationProperties.Name="{Binding DataContext.SelectedAccount.DisplayName, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay, StringFormat=Play as {0}}"
+                                                    IsEnabled="{Binding DataContext.HasSelectedAccount, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    Style="{StaticResource PrimaryButton}">
+                                                <TextBlock>
+                                                    <Run Text="Play as " />
+                                                    <Run Text="{Binding DataContext.SelectedAccount.DisplayName, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}" />
+                                                </TextBlock>
+                                            </Button>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <StackPanel Style="{StaticResource GameEmptyState}"
+                                    Width="420"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    TextBlock.TextAlignment="Center">
+                            <TextBlock FontSize="48" Text="▦" />
+                            <TextBlock Margin="0,14,0,0"
+                                       FontSize="20"
+                                       FontWeight="SemiBold"
+                                       Text="No installed games found" />
+                            <TextBlock Margin="0,8,0,18"
+                                       Style="{StaticResource MutedText}"
+                                       Text="Check the Steam location in Settings, then refresh the library." />
+                            <Button Width="150"
+                                    Content="Open Settings"
+                                    Click="OnSettingsNavClicked"
+                                    Style="{StaticResource SecondaryButton}" />
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+
+                <Grid Style="{StaticResource SettingsPageStyle}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Margin="4,0,4,18">
+                        <TextBlock Style="{StaticResource HeadingText}" Text="Settings &amp; safety" />
+                        <TextBlock Margin="0,5,0,0"
+                                   Style="{StaticResource MutedText}"
+                                   Text="Clear controls, local data, and honest Steam compatibility." />
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="850" HorizontalAlignment="Left">
+                            <Border Margin="0,0,0,14" Style="{StaticResource CardBorder}">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource SubheadingText}" Text="Steam installation" />
+                                    <TextBlock Margin="0,6,0,14"
+                                               Style="{StaticResource MutedText}"
+                                               Text="Switchboard reads your local library and hands launches to Steam." />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox IsReadOnly="True"
+                                                 Text="{Binding SteamExecutablePath}"
+                                                 AutomationProperties.Name="Steam executable path" />
+                                        <Button Grid.Column="1"
+                                                MinWidth="110"
+                                                Margin="10,0,0,0"
+                                                Content="Choose…"
+                                                Click="OnBrowseSteamClicked"
+                                                Style="{StaticResource SecondaryButton}" />
+                                    </Grid>
+                                    <TextBlock Margin="0,10,0,0"
+                                               Text="{Binding SteamPathStatus}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsSteamDetected}" Value="True">
+                                                        <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,0,0,14" Style="{StaticResource CardBorder}">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource SubheadingText}" Text="Local privacy" />
+                                    <TextBlock Margin="0,6,0,14"
+                                               Style="{StaticResource MutedText}"
+                                               Text="Account labels and browser profiles stay on this Windows account. No cloud sync, analytics, or telemetry is included." />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock FontWeight="SemiBold" Text="Data folder" />
+                                            <TextBlock x:Name="DataFolderText"
+                                                       Margin="0,4,0,0"
+                                                       Style="{StaticResource MutedText}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                        <Button Grid.Column="1"
+                                                MinWidth="110"
+                                                Content="Open folder"
+                                                Click="OnOpenDataFolderClicked"
+                                                Style="{StaticResource SecondaryButton}" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,0,0,14"
+                                    Background="#2A2111"
+                                    BorderBrush="#6B5420"
+                                    BorderThickness="1"
+                                    CornerRadius="12"
+                                    Padding="20">
+                                <StackPanel>
+                                    <TextBlock Foreground="{StaticResource WarningBrush}"
+                                               FontSize="17"
+                                               FontWeight="SemiBold"
+                                               Text="Why play-account verification is required" />
+                                    <TextBlock Margin="0,8,0,0"
+                                               Foreground="#E9D9B3"
+                                               Text="Valve officially supports one desktop-client account at a time. Switchboard never patches Steam, copies login tokens, automates its UI, or bypasses anti-cheat. If the requested account is not active, Steam's own account chooser remains in control." />
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource CardBorder}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource SubheadingText}" Text="Selected account" />
+                                        <TextBlock Margin="0,6,0,0"
+                                                   Style="{StaticResource MutedText}"
+                                                   Text="Forgetting an account clears its local Steam web session from this PC." />
+                                    </StackPanel>
+                                    <Button Grid.Column="1"
+                                            MinWidth="150"
+                                            Content="Forget account…"
+                                            Click="OnForgetAccountClicked"
+                                            IsEnabled="{Binding HasSelectedAccount}"
+                                            Style="{StaticResource DangerButton}" />
+                                </Grid>
+                            </Border>
+
+                            <TextBlock Margin="4,18,4,30"
+                                       Style="{StaticResource MutedText}"
+                                       Text="SteamSwitchboard is an independent, unofficial project and is not affiliated with Valve Corporation. Steam and the Steam logo are trademarks of Valve Corporation." />
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+        </Grid>
+
+        <Border Grid.Row="2"
+                Background="#07101B"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="0,1,0,0">
+            <Grid Margin="18,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse Width="7" Height="7" Margin="0,0,8,0" Fill="{StaticResource SuccessBrush}" />
+                    <TextBlock Style="{StaticResource MutedText}"
+                               FontSize="11"
+                               Text="{Binding StatusMessage}"
+                               AutomationProperties.LiveSetting="Polite" />
+                </StackPanel>
+                <TextBlock Grid.Column="1"
+                           VerticalAlignment="Center"
+                           Style="{StaticResource MutedText}"
+                           FontSize="11"
+                           Text="{Binding DataSummary}" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

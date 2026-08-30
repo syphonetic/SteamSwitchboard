@@ -1,0 +1,80 @@
+<UserControl x:Class="SteamSwitchboard.Controls.SteamChatSession"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+             Background="{StaticResource SurfaceBrush}">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Padding="12,9"
+                Background="#102738"
+                BorderBrush="#24506B"
+                BorderThickness="0,0,0,1"
+                CornerRadius="10,10,0,0">
+            <StackPanel>
+                <TextBlock x:Name="WorkspaceIdentityText"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="{StaticResource AccentBrush}"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Margin="0,3,0,0"
+                           FontSize="11"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="Steam's page is authoritative. Confirm its signed-in account before sending a message." />
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="1" Background="White" CornerRadius="0,0,10,10" ClipToBounds="True">
+            <wv2:WebView2 x:Name="Browser"
+                          AutomationProperties.Name="Steam Friends and Chat web page"
+                          DefaultBackgroundColor="White" />
+        </Border>
+
+        <Border x:Name="LoadingOverlay"
+                Grid.Row="1"
+                Background="{StaticResource SurfaceBrush}"
+                CornerRadius="10">
+            <StackPanel Width="360"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        TextBlock.TextAlignment="Center">
+                <ProgressBar Height="4" IsIndeterminate="True" />
+                <TextBlock Margin="0,24,0,0"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Text="Opening Steam Chat…" />
+                <TextBlock Margin="0,8,0,0"
+                           Style="{StaticResource MutedText}"
+                           Text="Your account has its own private browser profile." />
+            </StackPanel>
+        </Border>
+
+        <Border x:Name="ErrorOverlay"
+                Grid.Row="1"
+                Visibility="Collapsed"
+                Background="{StaticResource SurfaceBrush}"
+                CornerRadius="10">
+            <StackPanel Width="420"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        TextBlock.TextAlignment="Center">
+                <TextBlock FontSize="42" Text="↻" />
+                <TextBlock Margin="0,12,0,0"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Text="Steam Chat needs another try" />
+                <TextBlock x:Name="ErrorMessage"
+                           Margin="0,8,0,20"
+                           Style="{StaticResource MutedText}" />
+                <Button Width="140"
+                        Content="Reconnect"
+                        Click="OnReconnectClicked"
+                        Style="{StaticResource PrimaryButton}" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

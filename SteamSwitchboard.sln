@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SteamSwitchboard.App", "src\SteamSwitchboard.App\SteamSwitchboard.App.csproj", "{E76F8A68-A6B4-4C94-8420-A1BE559CF217}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SteamSwitchboard.Tests", "tests\SteamSwitchboard.Tests\SteamSwitchboard.Tests.csproj", "{57218B74-51C0-40C1-A8B7-1610F8403A58}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E76F8A68-A6B4-4C94-8420-A1BE559CF217}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E76F8A68-A6B4-4C94-8420-A1BE559CF217}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E76F8A68-A6B4-4C94-8420-A1BE559CF217}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E76F8A68-A6B4-4C94-8420-A1BE559CF217}.Release|Any CPU.Build.0 = Release|Any CPU
+		{57218B74-51C0-40C1-A8B7-1610F8403A58}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{57218B74-51C0-40C1-A8B7-1610F8403A58}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{57218B74-51C0-40C1-A8B7-1610F8403A58}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{57218B74-51C0-40C1-A8B7-1610F8403A58}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

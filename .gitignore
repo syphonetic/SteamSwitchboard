@@ -1,0 +1,24 @@
+# Build output
+**/bin/
+**/obj/
+TestResults/
+coverage/
+*.trx
+*.coverage
+*.coveragexml
+
+# IDE and user-local files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.rsuser
+
+# Release packages are reproducible through scripts/package.ps1
+artifacts/release/
+
+# OS clutter
+Thumbs.db
+Desktop.ini
+.DS_Store
