@@ -40,6 +40,7 @@ public sealed class SteamClientAccountService
             var document = VdfParser.ParseFile(loginUsersFile);
             var users = document.Get("users") ?? document;
             var accounts = new List<SteamClientAccount>();
+            var accountNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var (steamId, node) in users.Children)
             {
@@ -53,6 +54,13 @@ public sealed class SteamClientAccountService
                 if (!AccountValidator.IsSafeSteamLoginName(accountName))
                 {
                     continue;
+                }
+
+                if (!accountNames.Add(accountName))
+                {
+                    // Steam account names are globally unique. Ambiguous cached
+                    // metadata cannot safely authorize a native game launch.
+                    return [];
                 }
 
                 DateTimeOffset? timestamp = null;

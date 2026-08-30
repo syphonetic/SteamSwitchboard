@@ -7,6 +7,7 @@ public enum ChatConnectionState
     Starting,
     SignInRequired,
     Ready,
+    Dormant,
     Reconnecting,
     Failed
 }
@@ -16,6 +17,7 @@ public sealed class AccountViewModel : ObservableObject
     private ChatConnectionState _connectionState = ChatConnectionState.Starting;
     private int _unreadCount;
     private bool _isCurrentPlayAccount;
+    private bool _isSleeping;
 
     public AccountViewModel(AccountProfile profile)
     {
@@ -29,6 +31,8 @@ public sealed class AccountViewModel : ObservableObject
     public string DisplayName => Profile.DisplayName;
 
     public string SteamLoginName => Profile.SteamLoginName;
+
+    public string PlayAccountLabel => $"{DisplayName} (@{SteamLoginName})";
 
     public string AccentHex => Profile.AccentHex;
 
@@ -51,10 +55,12 @@ public sealed class AccountViewModel : ObservableObject
 
     public string StatusText => ConnectionState switch
     {
-        ChatConnectionState.Starting => "Starting chat",
+        ChatConnectionState.Starting => "Opening Steam Chat",
         ChatConnectionState.SignInRequired => "Sign in needed",
-        ChatConnectionState.Ready => "Steam page ready — verify account",
-        ChatConnectionState.Reconnecting => "Reconnecting",
+        ChatConnectionState.Ready when IsSleeping => "Sleeping — notifications paused",
+        ChatConnectionState.Ready => "Steam Chat workspace open",
+        ChatConnectionState.Dormant => "Select to open chat",
+        ChatConnectionState.Reconnecting => "Reloading Steam Chat",
         ChatConnectionState.Failed => "Needs attention",
         _ => "Unknown"
     };
@@ -83,5 +89,26 @@ public sealed class AccountViewModel : ObservableObject
     {
         get => _isCurrentPlayAccount;
         set => SetProperty(ref _isCurrentPlayAccount, value);
+    }
+
+    public bool IsSleeping
+    {
+        get => _isSleeping;
+        set
+        {
+            if (SetProperty(ref _isSleeping, value))
+            {
+                OnPropertyChanged(nameof(StatusText));
+            }
+        }
+    }
+
+    public void NotifyProfileChanged()
+    {
+        OnPropertyChanged(nameof(DisplayName));
+        OnPropertyChanged(nameof(SteamLoginName));
+        OnPropertyChanged(nameof(PlayAccountLabel));
+        OnPropertyChanged(nameof(AccentHex));
+        OnPropertyChanged(nameof(Initial));
     }
 }

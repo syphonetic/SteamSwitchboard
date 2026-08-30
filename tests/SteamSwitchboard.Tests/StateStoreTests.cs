@@ -16,6 +16,7 @@ public sealed class StateStoreTests
         var state = new PersistedState
         {
             LastSelectedAccountId = accountId,
+            LastPlayAccountId = accountId,
             Accounts =
             [
                 new AccountProfile
@@ -32,6 +33,7 @@ public sealed class StateStoreTests
         var json = await File.ReadAllTextAsync(statePath);
 
         Assert.AreEqual(accountId, loaded.LastSelectedAccountId);
+        Assert.AreEqual(accountId, loaded.LastPlayAccountId);
         Assert.AreEqual("main_login", loaded.Accounts.Single().SteamLoginName);
         Assert.IsFalse(json.Contains("password", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(json.Contains("guard", StringComparison.OrdinalIgnoreCase));
@@ -77,6 +79,28 @@ public sealed class StateStoreTests
         Assert.AreEqual(
             1,
             Directory.EnumerateFiles(temporary.Path, "state.corrupt.*.json").Count());
+    }
+
+    [TestMethod]
+    public async Task Save_RejectsAnUnsafeNumberOfAccountProfiles()
+    {
+        using var temporary = new TemporaryDirectory();
+        var state = new PersistedState
+        {
+            Accounts = Enumerable.Range(
+                    0,
+                    AccountValidator.MaximumAccountProfiles + 1)
+                .Select(index => new AccountProfile
+                {
+                    DisplayName = $"Profile {index}",
+                    SteamLoginName = $"profile_{index}"
+                })
+                .ToList()
+        };
+
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            new StateStore(System.IO.Path.Combine(temporary.Path, "state.json"))
+                .SaveAsync(state));
     }
 
     [TestMethod]
@@ -128,6 +152,55 @@ public sealed class StateStoreTests
         var state = await new StateStore(statePath).LoadAsync();
 
         Assert.IsNull(state.LastSelectedAccountId);
+    }
+
+    [TestMethod]
+    public async Task Load_ClearsAPlayIdentifierThatNoLongerExists()
+    {
+        using var temporary = new TemporaryDirectory();
+        var statePath = temporary.CreateFile(
+            "state.json",
+            $$"""
+            {
+              "schemaVersion": 3,
+              "lastPlayAccountId": "{{Guid.NewGuid()}}",
+              "accounts": [],
+              "settings": {}
+            }
+            """);
+
+        var state = await new StateStore(statePath).LoadAsync();
+
+        Assert.IsNull(state.LastPlayAccountId);
+    }
+
+    [TestMethod]
+    public async Task Load_MigratesLegacyStateToThePreviousSelectedPlayAccount()
+    {
+        using var temporary = new TemporaryDirectory();
+        var accountId = Guid.NewGuid();
+        var statePath = temporary.CreateFile(
+            "state.json",
+            $$"""
+            {
+              "schemaVersion": 2,
+              "lastSelectedAccountId": "{{accountId}}",
+              "accounts": [
+                {
+                  "id": "{{accountId}}",
+                  "displayName": "Legacy",
+                  "steamLoginName": "legacy_login",
+                  "accentHex": "#66C0F4"
+                }
+              ],
+              "settings": {}
+            }
+            """);
+
+        var state = await new StateStore(statePath).LoadAsync();
+
+        Assert.AreEqual(PersistedState.CurrentSchemaVersion, state.SchemaVersion);
+        Assert.AreEqual(accountId, state.LastPlayAccountId);
     }
 
     [TestMethod]

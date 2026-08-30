@@ -13,18 +13,32 @@ public enum AppSection
     Settings
 }
 
+public enum NativeSteamAccountState
+{
+    NoProfiles,
+    SteamNotRunning,
+    Unknown,
+    Match,
+    Mismatch
+}
+
 public sealed class MainViewModel : ObservableObject
 {
+    private const int MaximumNotificationHistory = 100;
+
     private readonly StateStore _stateStore;
     private readonly SteamInstallationService _steamInstallation;
     private readonly SteamLibraryService _steamLibrary;
     private PersistedState _state = new();
     private AccountViewModel? _selectedAccount;
+    private AccountViewModel? _selectedPlayAccount;
     private AppSection _selectedSection = AppSection.Chats;
     private string _gameSearch = string.Empty;
     private string _statusMessage = "Getting things ready…";
     private bool _isBusy;
     private string? _steamExecutablePath;
+    private string _currentSteamAccountStatus = "Current in Steam: not detected";
+    private NativeSteamAccountState _nativeSteamAccountState = NativeSteamAccountState.Unknown;
     private long _refreshGeneration;
 
     public MainViewModel(
@@ -44,6 +58,8 @@ public sealed class MainViewModel : ObservableObject
 
     public ObservableCollection<InstalledGame> Games { get; } = [];
 
+    public ObservableCollection<ChatNotificationViewModel> Notifications { get; } = [];
+
     public ICollectionView GamesView { get; }
 
     public AccountViewModel? SelectedAccount
@@ -59,7 +75,6 @@ public sealed class MainViewModel : ObservableObject
             if (value is not null)
             {
                 value.Profile.LastUsedUtc = DateTimeOffset.UtcNow;
-                value.UnreadCount = 0;
                 _state.LastSelectedAccountId = value.Id;
             }
 
@@ -70,6 +85,24 @@ public sealed class MainViewModel : ObservableObject
 
     public bool HasSelectedAccount => SelectedAccount is not null;
 
+    public AccountViewModel? SelectedPlayAccount
+    {
+        get => _selectedPlayAccount;
+        set
+        {
+            if (!SetProperty(ref _selectedPlayAccount, value))
+            {
+                return;
+            }
+
+            _state.LastPlayAccountId = value?.Id;
+            OnPropertyChanged(nameof(HasSelectedPlayAccount));
+            OnPropertyChanged(nameof(SelectedPlayAccountStatus));
+        }
+    }
+
+    public bool HasSelectedPlayAccount => SelectedPlayAccount is not null;
+
     public bool IsSelectedAccountPendingDeletion =>
         SelectedAccount is { } selected
         && IsAccountDeletionPending(selected.Id);
@@ -77,6 +110,16 @@ public sealed class MainViewModel : ObservableObject
     public bool HasAccounts => Accounts.Count > 0;
 
     public bool HasGames => Games.Count > 0;
+
+    public bool HasNotifications => Notifications.Count > 0;
+
+    public bool HasUnreadNotifications => Notifications.Any(item => item.IsUnread);
+
+    public int NotificationCount => Notifications.Count(item => item.IsUnread);
+
+    public string NotificationCountLabel => NotificationCount > 99
+        ? "99+"
+        : NotificationCount.ToString();
 
     public AppSection SelectedSection
     {
@@ -131,10 +174,113 @@ public sealed class MainViewModel : ObservableObject
         ? "Signed Valve Steam detected"
         : "Steam needs attention";
 
+    public string CurrentSteamAccountStatus
+    {
+        get => _currentSteamAccountStatus;
+        set
+        {
+            if (SetProperty(ref _currentSteamAccountStatus, value))
+            {
+                OnPropertyChanged(nameof(SelectedPlayAccountStatus));
+            }
+        }
+    }
+
+    public string SelectedPlayAccountStatus => SelectedPlayAccount switch
+    {
+        null => "Choose an account for game launches",
+        _ when NativeSteamAccountState == NativeSteamAccountState.SteamNotRunning =>
+            "Start Steam; Switchboard will verify the active account",
+        _ when NativeSteamAccountState == NativeSteamAccountState.Unknown =>
+            "Waiting for Steam to report its active account",
+        { IsCurrentPlayAccount: true } account when
+            NativeSteamAccountState == NativeSteamAccountState.Match =>
+            $"Match confirmed: {account.DisplayName} is active in Steam",
+        _ when NativeSteamAccountState == NativeSteamAccountState.Mismatch =>
+            "Switch Steam to this account before launch",
+        _ => "Switchboard will verify this account before launch"
+    };
+
+    public NativeSteamAccountState NativeSteamAccountState
+    {
+        get => _nativeSteamAccountState;
+        set
+        {
+            if (SetProperty(ref _nativeSteamAccountState, value))
+            {
+                OnPropertyChanged(nameof(SelectedPlayAccountStatus));
+            }
+        }
+    }
+
+    public string VersionLabel
+    {
+        get
+        {
+            var version = typeof(MainViewModel).Assembly.GetName().Version;
+            return version is null
+                ? "Version 1"
+                : $"Version {version.Major}.{version.Minor}.{version.Build}";
+        }
+    }
+
     public string DataSummary =>
         $"{Accounts.Count} account{(Accounts.Count == 1 ? string.Empty : "s")} · {Games.Count} installed game{(Games.Count == 1 ? string.Empty : "s")}";
 
     public AppSettings Settings => _state.Settings;
+
+    public bool KeepAllChatsLive
+    {
+        get => _state.Settings.KeepAllChatsLive;
+        set
+        {
+            if (_state.Settings.KeepAllChatsLive == value)
+            {
+                return;
+            }
+
+            _state.Settings.KeepAllChatsLive = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public bool ShowNotificationPreviews
+    {
+        get => _state.Settings.ShowNotificationPreviews;
+        set
+        {
+            if (_state.Settings.ShowNotificationPreviews == value)
+            {
+                return;
+            }
+
+            _state.Settings.ShowNotificationPreviews = value;
+            if (!value)
+            {
+                foreach (var notification in Notifications)
+                {
+                    notification.RedactPreview();
+                }
+            }
+
+            OnPropertyChanged();
+        }
+    }
+
+    public bool EnableWindowsNotifications
+    {
+        get => _state.Settings.EnableWindowsNotifications;
+        set
+        {
+            if (_state.Settings.EnableWindowsNotifications == value)
+            {
+                return;
+            }
+
+            _state.Settings.EnableWindowsNotifications = value;
+            OnPropertyChanged();
+        }
+    }
 
     public string? ValidateSteamExecutableCandidate(string? candidate) =>
         _steamInstallation.ValidateSteamExecutableCandidate(candidate);
@@ -150,6 +296,7 @@ public sealed class MainViewModel : ObservableObject
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         IsBusy = true;
+        string? stateLoadWarning = null;
         try
         {
             try
@@ -159,8 +306,10 @@ public sealed class MainViewModel : ObservableObject
             catch (InvalidDataException exception)
             {
                 _state = new PersistedState();
-                StatusMessage = exception.Message;
+                stateLoadWarning = exception.Message;
             }
+
+            RaiseSettingsStateChanged();
 
             Accounts.Clear();
             foreach (var account in _state.Accounts.OrderByDescending(item => item.LastUsedUtc))
@@ -170,15 +319,18 @@ public sealed class MainViewModel : ObservableObject
 
             SelectedAccount = Accounts.FirstOrDefault(account => account.Id == _state.LastSelectedAccountId)
                 ?? Accounts.FirstOrDefault();
+            SelectedPlayAccount = Accounts.FirstOrDefault(
+                account => account.Id == _state.LastPlayAccountId);
 
             SteamExecutablePath = _steamInstallation.FindSteamExecutable(
                 _state.Settings.SteamExecutablePath);
             await RefreshGamesAsync(cancellationToken);
-            StatusMessage = HasAccounts
-                ? _state.PendingBrowserProfileDeletionIds.Count > 0
-                    ? "Finishing a previously requested account cleanup…"
-                    : "Ready"
-                : "Add your first account to begin";
+            StatusMessage = stateLoadWarning
+                ?? (HasAccounts
+                    ? _state.PendingBrowserProfileDeletionIds.Count > 0
+                        ? "Finishing a previously requested account cleanup…"
+                        : "Ready"
+                    : "Add your first account to begin");
             RaiseCollectionStateChanged();
         }
         finally
@@ -201,11 +353,17 @@ public sealed class MainViewModel : ObservableObject
 
         var previousSelected = SelectedAccount;
         var previousSelectedId = _state.LastSelectedAccountId;
+        var previousPlayAccount = SelectedPlayAccount;
+        var previousPlayAccountId = _state.LastPlayAccountId;
         _state.Accounts.Add(profile);
         _state.LastSelectedAccountId = profile.Id;
         var viewModel = new AccountViewModel(profile);
         Accounts.Insert(0, viewModel);
         SelectedAccount = viewModel;
+        if (previousPlayAccount is null)
+        {
+            SelectedPlayAccount = viewModel;
+        }
         try
         {
             await SaveAsync(cancellationToken);
@@ -216,6 +374,8 @@ public sealed class MainViewModel : ObservableObject
             _state.Accounts.Remove(profile);
             SelectedAccount = previousSelected;
             _state.LastSelectedAccountId = previousSelectedId;
+            SelectedPlayAccount = previousPlayAccount;
+            _state.LastPlayAccountId = previousPlayAccountId;
             RaiseCollectionStateChanged();
             throw;
         }
@@ -239,6 +399,8 @@ public sealed class MainViewModel : ObservableObject
 
         var previousSelected = SelectedAccount;
         var previousSelectedId = _state.LastSelectedAccountId;
+        var previousPlayAccount = SelectedPlayAccount;
+        var previousPlayAccountId = _state.LastPlayAccountId;
         var wasSelected = ReferenceEquals(previousSelected, account);
         var pendingWasPresent = _state.PendingBrowserProfileDeletionIds.Remove(account.Id);
         OnPropertyChanged(nameof(IsSelectedAccountPendingDeletion));
@@ -250,7 +412,14 @@ public sealed class MainViewModel : ObservableObject
             SelectedAccount = Accounts.FirstOrDefault();
         }
 
+        var removedPlayAccount = ReferenceEquals(previousPlayAccount, account);
+        if (removedPlayAccount)
+        {
+            SelectedPlayAccount = null;
+        }
+
         _state.LastSelectedAccountId = SelectedAccount?.Id;
+        _state.LastPlayAccountId = SelectedPlayAccount?.Id;
         try
         {
             await SaveAsync(cancellationToken);
@@ -266,13 +435,167 @@ public sealed class MainViewModel : ObservableObject
 
             SelectedAccount = previousSelected;
             _state.LastSelectedAccountId = previousSelectedId;
+            SelectedPlayAccount = previousPlayAccount;
+            _state.LastPlayAccountId = previousPlayAccountId;
             OnPropertyChanged(nameof(IsSelectedAccountPendingDeletion));
             RaiseCollectionStateChanged();
             throw;
         }
 
         RaiseCollectionStateChanged();
-        StatusMessage = $"{account.DisplayName} was forgotten on this PC.";
+        ClearNotifications(account.Id);
+        StatusMessage = removedPlayAccount && Accounts.Count > 0
+            ? $"{account.DisplayName} was forgotten. Choose a new Play account."
+            : $"{account.DisplayName} was forgotten on this PC.";
+    }
+
+    public async Task RenameAccountAsync(
+        AccountViewModel account,
+        string displayName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(account);
+        if (!_state.Accounts.Any(item => item.Id == account.Id))
+        {
+            throw new InvalidOperationException("That account is no longer in Switchboard.");
+        }
+
+        var candidate = new AccountProfile
+        {
+            Id = account.Profile.Id,
+            DisplayName = displayName,
+            SteamLoginName = account.Profile.SteamLoginName,
+            AccentHex = account.Profile.AccentHex,
+            CreatedUtc = account.Profile.CreatedUtc,
+            LastUsedUtc = account.Profile.LastUsedUtc
+        };
+        AccountValidator.Normalize(candidate);
+        var validation = AccountValidator.Validate(
+            candidate,
+            _state.Accounts.Where(item => item.Id != account.Id));
+        if (validation is not null)
+        {
+            throw new ArgumentException(validation, nameof(displayName));
+        }
+
+        var previousName = account.Profile.DisplayName;
+        account.Profile.DisplayName = candidate.DisplayName;
+        account.NotifyProfileChanged();
+        try
+        {
+            await SaveAsync(cancellationToken);
+        }
+        catch
+        {
+            account.Profile.DisplayName = previousName;
+            account.NotifyProfileChanged();
+            throw;
+        }
+
+        foreach (var notification in Notifications.Where(
+                     item => item.AccountId == account.Id))
+        {
+            notification.UpdateAccountDisplayName(account.DisplayName);
+        }
+
+        StatusMessage = $"Profile renamed to {account.DisplayName}";
+    }
+
+    public ChatNotificationViewModel AddNotification(
+        AccountViewModel account,
+        ChatNotificationPayload payload,
+        Action? reportClicked = null,
+        Action? reportClosed = null)
+    {
+        ArgumentNullException.ThrowIfNull(account);
+        ArgumentNullException.ThrowIfNull(payload);
+
+        var preview = ShowNotificationPreviews
+            ? payload.Preview
+            : "New Steam Chat message";
+        var notification = payload.ReplacesUnreadFallback
+            ? Notifications.FirstOrDefault(item =>
+                item.AccountId == account.Id && item.IsUnreadFallback)
+            : null;
+        notification ??= !string.IsNullOrWhiteSpace(payload.ReplacementTag)
+            ? Notifications.FirstOrDefault(item =>
+                item.AccountId == account.Id
+                && string.Equals(
+                    item.ReplacementTag,
+                    payload.ReplacementTag,
+                    StringComparison.Ordinal))
+            : null;
+        if (notification is null)
+        {
+            notification = new ChatNotificationViewModel(
+                account.Id,
+                account.DisplayName,
+                account.SteamLoginName,
+                payload.SteamTitle,
+                preview,
+                payload.ReceivedUtc,
+                payload.ReplacementTag,
+                payload.IsUnreadFallback,
+                reportClicked,
+                reportClosed);
+            Notifications.Insert(0, notification);
+        }
+        else
+        {
+            notification.Replace(
+                payload.SteamTitle,
+                preview,
+                payload.ReceivedUtc,
+                payload.ReplacementTag,
+                payload.IsUnreadFallback,
+                reportClicked,
+                reportClosed);
+            var existingIndex = Notifications.IndexOf(notification);
+            if (existingIndex > 0)
+            {
+                Notifications.Move(existingIndex, 0);
+            }
+        }
+
+        while (Notifications.Count > MaximumNotificationHistory)
+        {
+            var expired = Notifications[^1];
+            expired.CloseLifecycle();
+            Notifications.RemoveAt(Notifications.Count - 1);
+        }
+
+        RaiseNotificationStateChanged();
+        return notification;
+    }
+
+    public void ClearNotifications()
+    {
+        foreach (var notification in Notifications)
+        {
+            notification.CloseLifecycle();
+        }
+
+        Notifications.Clear();
+        RaiseNotificationStateChanged();
+    }
+
+    public void ClearNotifications(Guid accountId) =>
+        RemoveNotificationsForAccount(accountId);
+
+    public void MarkNotificationsRead(Guid accountId)
+    {
+        foreach (var notification in Notifications.Where(
+                     item => item.AccountId == accountId && item.IsUnread))
+        {
+            notification.MarkRead();
+        }
+
+        RaiseNotificationStateChanged();
+    }
+
+    public void NotifyCurrentPlayAccountChanged()
+    {
+        OnPropertyChanged(nameof(SelectedPlayAccountStatus));
     }
 
     public async Task MarkAccountDeletionPendingAsync(
@@ -342,6 +665,7 @@ public sealed class MainViewModel : ObservableObject
     {
         _state.Settings.SteamExecutablePath = SteamExecutablePath;
         _state.LastSelectedAccountId = SelectedAccount?.Id;
+        _state.LastPlayAccountId = SelectedPlayAccount?.Id;
         return _stateStore.SaveAsync(_state, cancellationToken);
     }
 
@@ -362,5 +686,35 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(HasAccounts));
         OnPropertyChanged(nameof(HasGames));
         OnPropertyChanged(nameof(DataSummary));
+    }
+
+    private void RemoveNotificationsForAccount(Guid accountId)
+    {
+        for (var index = Notifications.Count - 1; index >= 0; index--)
+        {
+            if (Notifications[index].AccountId == accountId)
+            {
+                Notifications[index].CloseLifecycle();
+                Notifications.RemoveAt(index);
+            }
+        }
+
+        RaiseNotificationStateChanged();
+    }
+
+    private void RaiseNotificationStateChanged()
+    {
+        OnPropertyChanged(nameof(HasNotifications));
+        OnPropertyChanged(nameof(HasUnreadNotifications));
+        OnPropertyChanged(nameof(NotificationCount));
+        OnPropertyChanged(nameof(NotificationCountLabel));
+    }
+
+    private void RaiseSettingsStateChanged()
+    {
+        OnPropertyChanged(nameof(Settings));
+        OnPropertyChanged(nameof(KeepAllChatsLive));
+        OnPropertyChanged(nameof(ShowNotificationPreviews));
+        OnPropertyChanged(nameof(EnableWindowsNotifications));
     }
 }

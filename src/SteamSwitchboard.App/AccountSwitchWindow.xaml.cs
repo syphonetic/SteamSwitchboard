@@ -21,12 +21,17 @@ public partial class AccountSwitchWindow : Window
         GameLaunchService launcher)
     {
         InitializeComponent();
+        WindowSizing.ClampToCurrentWorkArea(this);
         _account = account ?? throw new ArgumentNullException(nameof(account));
         _game = game ?? throw new ArgumentNullException(nameof(game));
         _configuredSteamPath = configuredSteamPath;
         _launcher = launcher ?? throw new ArgumentNullException(nameof(launcher));
 
-        InstructionText.Text = $"In Steam, choose “{_account.SteamLoginName}”";
+        InstructionText.Text =
+            $"In Steam, choose “{_account.SteamLoginName}” to play {_game.Name}";
+        RequiredAccountText.Text =
+            $"Required: {_account.DisplayName} (@{_account.SteamLoginName})";
+        CurrentAccountText.Text = "Current in Steam: checking…";
         _timer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromSeconds(1)
@@ -70,9 +75,12 @@ public partial class AccountSwitchWindow : Window
         }
 
         StatusText.Text = assessment.Message;
+        CurrentAccountText.Text = assessment.ActiveAccount is null
+            ? "Current in Steam: not detected"
+            : $"Current in Steam: {assessment.ActiveAccount.PersonaName} (@{assessment.ActiveAccount.AccountName})";
         OpenSteamButton.Content = assessment.Readiness == LaunchReadiness.SteamNotRunning
             ? "Start Steam"
-            : "Show Steam";
+            : "Open Steam to switch account";
 
         if (!assessment.CanLaunch)
         {
@@ -85,6 +93,7 @@ public partial class AccountSwitchWindow : Window
         WaitingProgress.Value = 100;
         StatusText.Foreground = (System.Windows.Media.Brush)FindResource("SuccessBrush");
         StatusText.Text = $"Verified. Starting {_game.Name}…";
+        LaunchArmedText.Text = "Account verified — launch handed safely to Steam.";
 
         DialogResult = true;
     }
@@ -94,7 +103,8 @@ public partial class AccountSwitchWindow : Window
         try
         {
             _launcher.OpenSteam(_configuredSteamPath);
-            StatusText.Text = $"Waiting for Steam to use {_account.DisplayName}…";
+            StatusText.Text =
+                $"Waiting for Steam to activate {_account.SteamLoginName}…";
         }
         catch (Exception exception) when (
             exception is InvalidOperationException

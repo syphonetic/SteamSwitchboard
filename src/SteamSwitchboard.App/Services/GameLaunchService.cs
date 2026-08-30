@@ -8,22 +8,31 @@ public sealed class GameLaunchService
 {
     private readonly SteamInstallationService _installationService;
     private readonly SteamClientAccountService _accountService;
-    private readonly Func<string, bool> _steamProcessChecker;
+    private readonly Func<string, SteamProcessIdentity?> _steamProcessIdentityProvider;
     private readonly Action<ProcessStartInfo> _processStarter;
+    private readonly Action<TimeSpan> _verificationDelay;
     private readonly object _launchGate = new();
 
     public GameLaunchService(
         SteamInstallationService installationService,
         SteamClientAccountService accountService,
         Func<string, bool>? steamProcessChecker = null,
-        Action<ProcessStartInfo>? processStarter = null)
+        Action<ProcessStartInfo>? processStarter = null,
+        Func<string, SteamProcessIdentity?>? steamProcessIdentityProvider = null,
+        Action<TimeSpan>? verificationDelay = null)
     {
         _installationService = installationService
             ?? throw new ArgumentNullException(nameof(installationService));
         _accountService = accountService
             ?? throw new ArgumentNullException(nameof(accountService));
-        _steamProcessChecker = steamProcessChecker ?? IsSteamRunning;
+        _steamProcessIdentityProvider = steamProcessIdentityProvider
+            ?? (steamProcessChecker is null
+                ? FindSteamProcessIdentity
+                : path => steamProcessChecker(path)
+                    ? new SteamProcessIdentity(-1, 0)
+                    : null);
         _processStarter = processStarter ?? StartProcess;
+        _verificationDelay = verificationDelay ?? Thread.Sleep;
     }
 
     public LaunchAssessment Assess(
@@ -45,12 +54,10 @@ public sealed class GameLaunchService
                 return first.Assessment;
             }
 
+            _verificationDelay(TimeSpan.FromMilliseconds(125));
             var confirmed = Evaluate(account, game, configuredSteamPath);
             if (!confirmed.Assessment.CanLaunch
-                || !string.Equals(
-                    first.SteamExecutable,
-                    confirmed.SteamExecutable,
-                    StringComparison.OrdinalIgnoreCase))
+                || !HasSameLaunchAuthority(first, confirmed))
             {
                 return confirmed.Assessment.CanLaunch
                     ? new LaunchAssessment(
@@ -69,12 +76,10 @@ public sealed class GameLaunchService
                     "Steam changed before it could be started. Select the signed Valve steam.exe again.");
             }
 
+            _verificationDelay(TimeSpan.FromMilliseconds(125));
             var final = Evaluate(account, game, configuredSteamPath);
             if (!final.Assessment.CanLaunch
-                || !string.Equals(
-                    confirmed.SteamExecutable,
-                    final.SteamExecutable,
-                    StringComparison.OrdinalIgnoreCase))
+                || !HasSameLaunchAuthority(confirmed, final))
             {
                 return final.Assessment.CanLaunch
                     ? new LaunchAssessment(
@@ -112,13 +117,17 @@ public sealed class GameLaunchService
         _processStarter(startInfo);
     }
 
-    public static bool IsSteamRunning(string expectedExecutable)
+    public static bool IsSteamRunning(string expectedExecutable) =>
+        FindSteamProcessIdentity(expectedExecutable) is not null;
+
+    public static SteamProcessIdentity? FindSteamProcessIdentity(
+        string expectedExecutable)
     {
         if (!LocalPathPolicy.TryNormalizeLocalPath(
                 expectedExecutable,
                 out var expectedPath))
         {
-            return false;
+            return null;
         }
 
         int currentSession;
@@ -134,18 +143,23 @@ public sealed class GameLaunchService
         }
         catch (InvalidOperationException)
         {
-            return false;
+            return null;
         }
 
+        SteamProcessIdentity? matchingIdentity = null;
         foreach (var process in processes)
         {
             using (process)
             {
                 try
                 {
+                    if (process.SessionId != currentSession)
+                    {
+                        continue;
+                    }
+
                     var imagePath = process.MainModule?.FileName;
-                    if (process.SessionId == currentSession
-                        && !string.IsNullOrWhiteSpace(imagePath)
+                    if (!string.IsNullOrWhiteSpace(imagePath)
                         && LocalPathPolicy.TryNormalizeLocalPath(
                             imagePath,
                             out var normalizedImage)
@@ -154,7 +168,15 @@ public sealed class GameLaunchService
                             expectedPath,
                             StringComparison.OrdinalIgnoreCase))
                     {
-                        return true;
+                        var identity = new SteamProcessIdentity(
+                            process.Id,
+                            process.StartTime.ToUniversalTime().Ticks);
+                        if (matchingIdentity is not null)
+                        {
+                            return null;
+                        }
+
+                        matchingIdentity = identity;
                     }
                 }
                 catch (Exception exception) when (
@@ -167,7 +189,7 @@ public sealed class GameLaunchService
             }
         }
 
-        return false;
+        return matchingIdentity;
     }
 
     private LaunchContext Evaluate(
@@ -177,8 +199,10 @@ public sealed class GameLaunchService
     {
         var steamExecutable = _installationService.FindSteamExecutable(configuredSteamPath);
         var steamRoot = Path.GetDirectoryName(steamExecutable);
-        var isRunning = !string.IsNullOrWhiteSpace(steamExecutable)
-            && _steamProcessChecker(steamExecutable);
+        var processIdentity = !string.IsNullOrWhiteSpace(steamExecutable)
+            ? _steamProcessIdentityProvider(steamExecutable)
+            : null;
+        var isRunning = processIdentity is not null;
         var activeAccount = !string.IsNullOrWhiteSpace(steamRoot) && isRunning
             ? _accountService.FindActiveAccount(steamRoot)
             : null;
@@ -190,7 +214,9 @@ public sealed class GameLaunchService
                 steamExecutable,
                 isRunning,
                 activeAccount),
-            steamExecutable);
+            steamExecutable,
+            processIdentity,
+            activeAccount);
     }
 
     private static void StartProcess(ProcessStartInfo startInfo)
@@ -229,5 +255,27 @@ public sealed class GameLaunchService
 
     private sealed record LaunchContext(
         LaunchAssessment Assessment,
-        string? SteamExecutable);
+        string? SteamExecutable,
+        SteamProcessIdentity? ProcessIdentity,
+        SteamClientAccount? ActiveAccount);
+
+    private static bool HasSameLaunchAuthority(
+        LaunchContext first,
+        LaunchContext second) =>
+        string.Equals(
+            first.SteamExecutable,
+            second.SteamExecutable,
+            StringComparison.OrdinalIgnoreCase)
+        && first.ProcessIdentity is not null
+        && first.ProcessIdentity == second.ProcessIdentity
+        && first.ActiveAccount is not null
+        && second.ActiveAccount is not null
+        && string.Equals(
+            first.ActiveAccount.SteamId,
+            second.ActiveAccount.SteamId,
+            StringComparison.Ordinal)
+        && string.Equals(
+            first.ActiveAccount.AccountName,
+            second.ActiveAccount.AccountName,
+            StringComparison.OrdinalIgnoreCase);
 }

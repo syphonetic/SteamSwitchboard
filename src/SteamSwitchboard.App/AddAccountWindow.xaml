@@ -6,9 +6,9 @@
         Background="{StaticResource BackgroundBrush}"
         Width="540"
         Height="590"
-        MinWidth="500"
-        MinHeight="550"
-        ResizeMode="NoResize"
+        MinWidth="400"
+        MinHeight="360"
+        ResizeMode="CanResizeWithGrip"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False">
     <Grid Margin="32" Background="{StaticResource BackgroundBrush}">
@@ -22,13 +22,19 @@
             <TextBlock Text="Add an account" Style="{StaticResource HeadingText}" />
             <TextBlock Margin="0,8,0,0"
                        Style="{StaticResource MutedText}"
+                       TextWrapping="Wrap"
                        Text="Give the account a clear label. You will sign in directly on Steam's website after it is added." />
         </StackPanel>
 
-        <StackPanel Grid.Row="1" Margin="0,26,0,20">
-            <TextBlock Text="Profile name" FontWeight="SemiBold" />
+        <ScrollViewer Grid.Row="1"
+                      Margin="0,26,0,20"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="0,0,12,0">
+            <TextBlock Text="Switchboard label" FontWeight="SemiBold" />
             <TextBlock Margin="0,4,0,8"
                        Style="{StaticResource MutedText}"
+                       TextWrapping="Wrap"
                        Text="What you want to see in Switchboard, such as Main or Trading." />
             <TextBox x:Name="DisplayNameTextBox"
                      MaxLength="64"
@@ -38,6 +44,7 @@
             <TextBlock Margin="0,22,0,0" Text="Steam account name" FontWeight="SemiBold" />
             <TextBlock Margin="0,4,0,8"
                        Style="{StaticResource MutedText}"
+                       TextWrapping="Wrap"
                        Text="The account name shown by Steam's account switcher—not your password or email." />
             <TextBox x:Name="SteamLoginNameTextBox"
                      MaxLength="64"
@@ -80,6 +87,7 @@
                        FontWeight="SemiBold"
                        AutomationProperties.LiveSetting="Assertive" />
         </StackPanel>
+        </ScrollViewer>
 
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
             <Button MinWidth="100"

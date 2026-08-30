@@ -9,9 +9,13 @@ SteamSwitchboard is a local companion, not a replacement Steam client. It combin
 ```text
 WPF shell (single instance, standard integrity)
 ├─ Account workspace
-│  └─ SteamChatSession loaded on selection
-│     └─ shared WebView2 user-data folder
-│        └─ isolated account-{GUID} profile
+│  ├─ one isolated SteamChatSession per open account (maximum 16 live)
+│  │  └─ shared WebView2 user-data folder
+│  │     └─ isolated account-{GUID} profile
+│  └─ notification router
+│     ├─ exact-origin Web Notification metadata
+│     ├─ unread-title fallback
+│     └─ bounded in-memory account/title history + Windows notification
 ├─ Games workspace
 │  ├─ SteamInstallationService
 │  │  └─ local path + reparse + Authenticode/Valve verification
@@ -22,7 +26,7 @@ WPF shell (single instance, standard integrity)
 │     ├─ SteamClientAccountService
 │     │  ├─ HKCU ActiveProcess\ActiveUser (authoritative)
 │     │  └─ bounded loginusers.vdf (ID-to-login metadata only)
-│     ├─ repeated stable account/executable checks
+│     ├─ repeated stable SteamID/process/executable checks
 │     └─ locked steam.exe → -applaunch <AppId>
 └─ Local state
    ├─ state.json atomic replacement
@@ -33,13 +37,13 @@ WPF shell (single instance, standard integrity)
 
 ## Conversation isolation and trust
 
-All controls share one WebView2 user-data root to reuse the runtime, but every account receives a unique `ProfileName` derived only from its GUID. WebView2 isolates cookies, cache, site storage, permissions, and preferences per profile. Cold profiles are not warmed at startup; the selected workspace is created first and hidden workspaces are suspended.
+All controls share one WebView2 user-data root to reuse the runtime, but every account receives a unique `ProfileName` derived only from its GUID. WebView2 isolates cookies, cache, site storage, permissions, and preferences per profile. The selected workspace is created first, then non-deleting profiles are warmed serially up to a 16-session live budget and remain active in the background by default. Selecting a profile beyond that budget disposes the least-recently-used hidden controller and reopens the requested profile from its isolated persistent data. Up to 512 profiles can be saved. Users can explicitly enable background sleep to reduce memory use; that setting trades immediate notifications for lower resource use.
 
-The host never injects script, reads cookies, registers a host object, or enables web messaging. It observes navigation status and a numeric unread prefix in the document title only.
+The host never injects script, reads cookies, registers a host object, or enables web messaging. It observes navigation status, WebView2's native non-persistent notification event, and a numeric unread prefix in the document title only. Notification title/body strings remain untrusted: exact-origin policy, constant-time raw-length rejection before sanitisation, Unicode control/bidirectional removal, fixed display limits, tagged replacement, deferred native click/close reporting, correlated unread fallback, bounded history, per-profile/global circuit breakers, and non-persistence apply before display. The title normally contains the sender shown by Steam, but Switchboard does not claim that web-controlled string is cryptographically verified identity. Legacy Windows balloon callbacks carry no immutable notification identifier, so they can open only the generic labelled notification center; account navigation occurs only from a specific in-app entry.
 
 ### Document policy
 
-`about:blank` is accepted only as the exact initial browser page. Remote documents require default-port HTTPS, no URI user information, exact host `steamcommunity.com`, and a `/chat` or `/login` path boundary. The same decision function protects:
+`about:blank` is accepted only as the exact local bootstrap/privacy-reset page. When a visible workspace has requested microphone access, switching away must complete a host-generated `NavigateToString` blank document before Steam Chat may reconnect; a timeout or navigation failure disposes the controller. Remote documents require default-port HTTPS, no URI user information, exact host `steamcommunity.com`, and a `/chat` or `/login` path boundary. The same decision function protects:
 
 - top-level `NavigationStarting`;
 - every `CoreWebView2Frame.NavigationStarting`, including nested frames; and
@@ -47,11 +51,11 @@ The host never injects script, reads cookies, registers a host object, or enable
 
 Static/CDN domains remain available as ordinary subresources but cannot become a trusted top-level or child document. Non-user-initiated external navigation is canceled silently. A direct user gesture may open one bounded, canonical external HTTPS URL after confirmation.
 
-Permissions are deny-by-default and never saved. Only a user-initiated microphone request from the exact Steam origin while the selected workspace and window are visible can reach WebView2's own prompt. Screen capture, camera, clipboard read, HTTP authentication, client certificates, downloads, custom protocols, script dialogs, context menus, autofill, password storage, developer tools, host objects, and web messaging are denied or disabled.
+Permissions are deny-by-default and never saved. Notification permission is allowed only for the exact Steam origin and is handled by the native host; untrusted origins are discarded. Only a user-initiated microphone request from the exact Steam origin while the selected workspace and window are visible can reach WebView2's own prompt. Screen capture, camera, clipboard read, HTTP authentication, client certificates, downloads, custom protocols, script dialogs, context menus, autofill, password storage, developer tools, host objects, and web messaging are denied or disabled.
 
 ### Identity semantics
 
-The user-entered profile label and login name select local workspace and native-launch intent. They do not cryptographically identify the web account. A host-owned area above the WebView permanently shows the expected login and states that Steam's page is authoritative. The UI says “Steam page ready,” never “identity verified.”
+The user-entered profile label and login name select local workspace and native-launch intent. They do not cryptographically identify the web account. A host-owned area above the WebView permanently shows the expected login and states that Steam's page is authoritative. The connection status says `Steam Chat workspace open`; it reports a loaded workspace rather than claiming chat-service connectivity or verified web identity. Friendly labels can be renamed transactionally, but the Steam login name remains stable for launch verification.
 
 ## Native launch state machine
 
@@ -63,16 +67,16 @@ Resolve absolute local steam.exe
           │
           ├─ remote/link/unsigned/non-Valve ──► block
           ▼
-Match running image path + Windows session
+Match one running image path + Windows session + process ID/start time
           │
           ├─ not running ──► ask user to start Steam
           ▼
-Read authoritative ActiveUser and map valid SteamID64
+Read authoritative ActiveUser and map one valid, non-ambiguous SteamID64
           │
           ├─ absent/unmatched/signed out ──► block as unknown
           ├─ different login ──────────────► guide user to switch in Steam
           ▼
-Repeat account and executable checks
+Wait, then repeat SteamID, process, account, and executable checks
           │
           ├─ any change ──► block
           ▼
@@ -82,7 +86,7 @@ Open steam.exe read-only with write/delete sharing denied
 Revalidate Authenticode publisher while locked
           │
           ▼
-Recheck process, game, and ActiveUser while locked
+Wait, then recheck process identity, game, SteamID, and ActiveUser while locked
           │
           ├─ any change ──► block
           │
@@ -90,7 +94,7 @@ Recheck process, game, and ActiveUser while locked
 ProcessStartInfo.ArgumentList: -applaunch <uint AppId>
 ```
 
-`MostRecent` remains useful for ordering cached metadata but is never a launch authority. The registry value is deliberately treated as unknown when absent rather than falling back to stale state.
+`MostRecent` remains useful for ordering cached metadata but is never a launch authority. The registry value is deliberately treated as unknown when absent rather than falling back to stale state. Duplicate case-insensitive login names in `loginusers.vdf` invalidate the complete account mapping. Every successful evaluation must return the same SteamID and exact process identity as the prior evaluation.
 
 ## Untrusted local metadata
 
@@ -102,23 +106,24 @@ Directory enumeration and parsing occur inside exception boundaries. Results are
 
 ## Persistence and deletion protocol
 
-`StateStore` accepts at most 4 MiB, JSON depth 32, and 100,000 JSON elements. Case-insensitive duplicate properties and unknown properties are rejected. Before use, state is normalised and validates every account ID/name/colour, ID uniqueness, selected ID, configured path, and deletion tombstone. Invalid state is quarantined to at most three collision-resistant recovery files.
+`StateStore` accepts at most 4 MiB, JSON depth 32, 100,000 JSON elements, and 512 account profiles. Case-insensitive duplicate properties and unknown properties are rejected. Before use, a linear pass normalises and validates every account ID/login/name/colour, identity uniqueness, selected-chat ID, selected-play ID, configured path, and deletion tombstone. Invalid state is quarantined to at most three collision-resistant recovery files. Notification content is never part of persisted state.
 
 Writes serialise to a unique same-directory file with write-through semantics, flush, size-check, and replace the primary. Add/remove operations roll UI and model state back if persistence fails. A per-session named mutex prevents two GUI instances from overwriting each other's snapshots.
 
 For account forgetting:
 
 1. persist the profile GUID in `PendingBrowserProfileDeletionIds`;
-2. clear all profile browsing-data kinds where possible;
-3. call WebView2 `Profile.Delete()`, which marks/retries profile deletion;
-4. dispose the controller; and
-5. atomically remove account metadata and tombstone.
+2. suppress and close its notification lifecycle, detach the controller from the host, and commit a local blank document;
+3. clear all profile browsing-data kinds where possible;
+4. call WebView2 `Profile.Delete()`, which marks/retries profile deletion;
+5. dispose the controller in a `finally` path; and
+6. atomically remove account metadata and tombstone.
 
-If steps 2–3 cannot schedule deletion, the account remains visible and pending. Startup retries every tombstone before opening normal chat workspaces; the cleanup-only WebView2 initialization does not navigate to Steam or another network page.
+If steps 3–4 cannot schedule deletion, the account remains visible and pending but no authenticated controller remains live. Startup retries every tombstone before opening normal chat workspaces; the cleanup-only WebView2 initialization does not navigate to Steam or another network page.
 
 ## Release design
 
-One project version drives executable metadata, archive name, smoke test, and validation. NuGet restore clears inherited feeds, maps all packages to `nuget.org`, requires its repository signature, and uses lock files. The repository certificate fingerprint must be updated through a reviewed change when NuGet rotates it.
+One project version drives executable metadata, archive name, smoke test, and validation. NuGet restore clears inherited feeds, maps all packages to `nuget.org`, requires its repository signature, and uses lock files. A locked legacy Microsoft dependency that predates repository countersigning is accepted only from its exact pinned Microsoft author certificate. Certificate fingerprints must be updated through a reviewed change when a signer rotates.
 
 Packaging uses a private temporary publish tree, exclusive release lock, sorted entries, fixed ZIP timestamps, and a temporary archive/checksum pair. It validates required files, version, icon, signature policy, entry count/size, traversal, separators, links, reserved names, case collisions, and forbidden local/debug data before publishing. Adversarial fixture tests prove those checks fail closed.
 

@@ -132,19 +132,36 @@ try {
         throw "dotnet publish exited with code $LASTEXITCODE."
     }
 
-    foreach ($document in @('README.md', 'LICENSE', 'NOTICE.md', 'SECURITY.md', 'CHANGELOG.md')) {
+    foreach ($document in @(
+        'README.md',
+        'LICENSE',
+        'NOTICE.md',
+        'SECURITY.md',
+        'CHANGELOG.md',
+        'CONTRIBUTING.md')) {
         Copy-Item -LiteralPath (Join-Path $projectRoot $document) -Destination $publishDirectory
     }
 
     $packageDocs = Join-Path $publishDirectory 'docs'
     [System.IO.Directory]::CreateDirectory($packageDocs) | Out-Null
-    foreach ($document in @('ARCHITECTURE.md', 'PRIVACY.md', 'VALIDATION.md')) {
+    foreach ($document in @(
+        'ARCHITECTURE.md',
+        'PRIVACY.md',
+        'VALIDATION.md',
+        'GITHUB_RELEASE.md')) {
         Copy-Item -LiteralPath (Join-Path $projectRoot "docs\$document") -Destination $packageDocs
     }
 
     $packageArtifacts = Join-Path $publishDirectory 'artifacts'
     [System.IO.Directory]::CreateDirectory($packageArtifacts) | Out-Null
     Copy-Item -LiteralPath (Join-Path $projectRoot 'artifacts\ui-final.png') -Destination $packageArtifacts
+
+    $packageBranding = Join-Path $publishDirectory (
+        'src\SteamSwitchboard.App\Assets\Branding')
+    [System.IO.Directory]::CreateDirectory($packageBranding) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $projectRoot (
+        'src\SteamSwitchboard.App\Assets\Branding\SteamSwitchboard-logo-v1.png')) `
+        -Destination $packageBranding
 
     New-DeterministicArchive `
         -SourceDirectory $publishDirectory `

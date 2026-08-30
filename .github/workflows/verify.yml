@@ -3,6 +3,7 @@ name: Verify
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,14 +13,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  windows-release:
-    name: Windows Release gate
-    runs-on: windows-latest
-    timeout-minutes: 20
+  security-scanners:
+    name: Semgrep and Trivy security gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
 
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Python for Semgrep
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install pinned Semgrep
+        shell: bash
+        run: python -m pip install --disable-pip-version-check semgrep==1.175.0
+
+      - name: Scan C# source with Semgrep
+        shell: bash
+        run: >-
+          semgrep scan
+          --config p/csharp
+          --config p/security-audit
+          --metrics off
+          --no-git-ignore
+          --error
+          src tests
+
+      - name: Scan dependencies, secrets, and configuration with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          format: table
+          version: v0.74.0
+
+  windows-release:
+    name: Windows Release gate
+    needs: security-scanners
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      ContinuousIntegrationBuild: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      RestoreLockedMode: 'true'
+      TreatWarningsAsErrors: 'true'
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Install .NET SDK
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -28,6 +80,57 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages.lock.json'
 
-      - name: Build and test
+      - name: Restore locked packages
         shell: pwsh
-        run: ./scripts/verify.ps1
+        run: dotnet restore ./SteamSwitchboard.sln --locked-mode
+
+      - name: Build, test, and run security audit
+        shell: pwsh
+        run: ./scripts/security-audit.ps1 -Configuration Release
+
+      - name: Validate version tag
+        id: release_version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "Release tag '$tag' must use vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-prerelease."
+          }
+
+          $tagVersion = $Matches.version
+          [xml] $project = Get-Content -LiteralPath './src/SteamSwitchboard.App/SteamSwitchboard.App.csproj' -Raw
+          $projectVersions = @(
+            $project.Project.PropertyGroup |
+              ForEach-Object { [string]$_.Version } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )
+
+          if ($projectVersions.Count -ne 1) {
+            throw 'Expected exactly one Version element in SteamSwitchboard.App.csproj.'
+          }
+
+          $projectVersion = $projectVersions[0]
+          if ($tagVersion -cne $projectVersion) {
+            throw "Release tag version '$tagVersion' does not match project version '$projectVersion'."
+          }
+
+          "version=$tagVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Build and validate self-contained Windows package
+        shell: pwsh
+        run: ./scripts/package.ps1 -Configuration Release -Runtime win-x64
+
+      - name: Upload versioned Windows package
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: SteamSwitchboard-${{ steps.release_version.outputs.version }}-win-x64
+          path: |
+            artifacts/release/SteamSwitchboard-${{ steps.release_version.outputs.version }}-win-x64.zip
+            artifacts/release/SteamSwitchboard-${{ steps.release_version.outputs.version }}-win-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

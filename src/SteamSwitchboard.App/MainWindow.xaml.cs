@@ -14,13 +14,23 @@ namespace SteamSwitchboard;
 
 public partial class MainWindow : Window
 {
+    private const int MaximumQueuedWindowsNotifications = 20;
+    private const int MaximumSimultaneousChatSessions = 16;
+
     private readonly MainViewModel _viewModel;
     private readonly AppPaths _paths;
     private readonly GameLaunchService _launcher;
     private readonly Dictionary<Guid, SteamChatSession> _chatSessions = [];
     private readonly CancellationTokenSource _lifetime = new();
     private readonly DispatcherTimer _playAccountTimer;
+    private readonly DispatcherTimer _balloonReleaseTimer;
+    private readonly System.Windows.Forms.NotifyIcon _notificationIcon;
+    private readonly Queue<WindowsNotificationDelivery> _pendingBalloonNotifications = [];
+    private System.Drawing.Icon? _notificationTrayIcon;
+    private WindowsNotificationDelivery? _activeBalloonNotification;
+    private bool _startupStarted;
     private bool _isLoaded;
+    private bool _suppressSelectionEvents;
 
     public MainWindow(
         MainViewModel viewModel,
@@ -33,7 +43,19 @@ public partial class MainWindow : Window
         _launcher = launcher ?? throw new ArgumentNullException(nameof(launcher));
         DataContext = _viewModel;
         DataFolderText.Text = _paths.Root;
-        FitToCurrentWorkArea();
+        WindowSizing.ClampToCurrentWorkArea(this, 32);
+
+        _notificationIcon = new System.Windows.Forms.NotifyIcon
+        {
+            Text = "SteamSwitchboard"
+        };
+        InitializeNotificationIcon();
+
+        _balloonReleaseTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(7)
+        };
+        _balloonReleaseTimer.Tick += OnBalloonReleaseTimerTick;
 
         _playAccountTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -42,28 +64,19 @@ public partial class MainWindow : Window
         _playAccountTimer.Tick += (_, _) => UpdateCurrentPlayAccount();
     }
 
-    private void FitToCurrentWorkArea()
-    {
-        const double outerMargin = 32;
-        Width = Math.Max(
-            MinWidth,
-            Math.Min(Width, SystemParameters.WorkArea.Width - outerMargin));
-        Height = Math.Max(
-            MinHeight,
-            Math.Min(Height, SystemParameters.WorkArea.Height - outerMargin));
-    }
-
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
-        if (_isLoaded)
+        if (_startupStarted)
         {
             return;
         }
 
-        _isLoaded = true;
+        _startupStarted = true;
+        RootLayout.IsEnabled = false;
         try
         {
             await _viewModel.InitializeAsync(_lifetime.Token);
+            ApplyNotificationSettings();
             await ResumePendingProfileDeletionsAsync();
             ShowSelectedChat();
             await InitializeChatSessionsAsync();
@@ -83,6 +96,11 @@ public partial class MainWindow : Window
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
         }
+        finally
+        {
+            _isLoaded = true;
+            RootLayout.IsEnabled = true;
+        }
     }
 
     private async Task InitializeChatSessionsAsync()
@@ -92,6 +110,50 @@ public partial class MainWindow : Window
             && !_viewModel.IsAccountDeletionPending(selected.Id))
         {
             await EnsureChatSessionAsync(selected);
+        }
+
+        if (_viewModel.KeepAllChatsLive)
+        {
+            foreach (var account in _viewModel.Accounts)
+            {
+                _lifetime.Token.ThrowIfCancellationRequested();
+                if (ReferenceEquals(account, selected)
+                    || _viewModel.IsAccountDeletionPending(account.Id))
+                {
+                    continue;
+                }
+
+                if (_chatSessions.Count >= MaximumSimultaneousChatSessions)
+                {
+                    account.ConnectionState = ChatConnectionState.Dormant;
+                    continue;
+                }
+
+                await EnsureChatSessionAsync(account);
+            }
+
+            if (_viewModel.Accounts.Count > 1)
+            {
+                var pendingCount = _viewModel.Accounts.Count(account =>
+                    _viewModel.IsAccountDeletionPending(account.Id));
+                var eligibleCount = _viewModel.Accounts.Count - pendingCount;
+                var deferredCount = Math.Max(
+                    0,
+                    eligibleCount - _chatSessions.Count);
+                _viewModel.StatusMessage = pendingCount > 0
+                    ? $"{_chatSessions.Count} chat workspaces open · {pendingCount} cleanup pending"
+                    : deferredCount > 0
+                        ? $"{_chatSessions.Count} chat workspaces open · {deferredCount} open when selected"
+                        : $"Keeping {_chatSessions.Count} chat workspaces available";
+            }
+        }
+        else
+        {
+            foreach (var account in _viewModel.Accounts.Where(
+                         account => !_chatSessions.ContainsKey(account.Id)))
+            {
+                account.ConnectionState = ChatConnectionState.Dormant;
+            }
         }
 
         ShowSelectedChat();
@@ -112,8 +174,15 @@ public partial class MainWindow : Window
             return existing;
         }
 
+        if (_chatSessions.Count >= MaximumSimultaneousChatSessions)
+        {
+            ReleaseLeastRecentlyUsedSession(account.Id);
+        }
+
         var session = new SteamChatSession(account, _paths.BrowserData);
-        session.HideChat();
+        session.ChatNotificationReceived += OnChatNotificationReceived;
+        session.ChatReadyWhileVisible += OnChatReadyWhileVisible;
+        session.HideChat(_viewModel.KeepAllChatsLive);
         _chatSessions.Add(account.Id, session);
         ChatSessionContainer.Children.Add(session);
         if (forProfileCleanup)
@@ -133,6 +202,38 @@ public partial class MainWindow : Window
         return session;
     }
 
+    private void ReleaseLeastRecentlyUsedSession(Guid incomingAccountId)
+    {
+        var candidate = _chatSessions.Values
+            .Where(session => session.Account.Id != incomingAccountId)
+            .OrderBy(session => session.Account.Profile.LastUsedUtc)
+            .FirstOrDefault()
+            ?? throw new InvalidOperationException(
+                "A chat workspace could not be opened safely. Close and restart Switchboard, then try again.");
+        ReleaseChatSession(candidate, markDormant: true);
+    }
+
+    private void ReleaseChatSession(
+        SteamChatSession session,
+        bool markDormant)
+    {
+        DetachChatSessionFromHost(session);
+        session.Dispose();
+        if (markDormant)
+        {
+            session.Account.ConnectionState = ChatConnectionState.Dormant;
+            session.Account.IsSleeping = false;
+        }
+    }
+
+    private void DetachChatSessionFromHost(SteamChatSession session)
+    {
+        _chatSessions.Remove(session.Account.Id);
+        ChatSessionContainer.Children.Remove(session);
+        session.ChatNotificationReceived -= OnChatNotificationReceived;
+        session.ChatReadyWhileVisible -= OnChatReadyWhileVisible;
+    }
+
     private async Task ResumePendingProfileDeletionsAsync()
     {
         foreach (var account in _viewModel.AccountsPendingBrowserProfileDeletion.ToArray())
@@ -140,14 +241,7 @@ public partial class MainWindow : Window
             _lifetime.Token.ThrowIfCancellationRequested();
             try
             {
-                var session = await EnsureChatSessionAsync(
-                    account,
-                    forProfileCleanup: true);
-                await session.ClearSessionAsync();
-                _chatSessions.Remove(account.Id);
-                ChatSessionContainer.Children.Remove(session);
-                session.Dispose();
-                await _viewModel.RemoveAccountAsync(account, _lifetime.Token);
+                await CompletePendingProfileDeletionAsync(account);
             }
             catch (Exception exception) when (
                 exception is IOException
@@ -162,6 +256,43 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task CompletePendingProfileDeletionAsync(
+        AccountViewModel account)
+    {
+        SteamChatSession? session = null;
+        try
+        {
+            session = await EnsureChatSessionAsync(
+                account,
+                forProfileCleanup: true);
+            DetachChatSessionFromHost(session);
+            await session.ClearSessionAsync();
+            _suppressSelectionEvents = true;
+            try
+            {
+                await _viewModel.RemoveAccountAsync(account, _lifetime.Token);
+            }
+            finally
+            {
+                _suppressSelectionEvents = false;
+            }
+        }
+        finally
+        {
+            if (session is null
+                && _chatSessions.TryGetValue(account.Id, out var trackedSession))
+            {
+                session = trackedSession;
+            }
+
+            if (session is not null)
+            {
+                DetachChatSessionFromHost(session);
+                session.Dispose();
+            }
+        }
+    }
+
     private void ShowSelectedChat()
     {
         foreach (var (accountId, session) in _chatSessions)
@@ -170,11 +301,14 @@ public partial class MainWindow : Window
                 && _viewModel.SelectedAccount?.Id == accountId
                 && !_viewModel.IsAccountDeletionPending(accountId))
             {
-                session.ShowChat();
+                if (session.ShowChat() && CanMarkSelectedChatRead(accountId))
+                {
+                    MarkAccountRead(session.Account);
+                }
             }
             else
             {
-                session.HideChat();
+                session.HideChat(_viewModel.KeepAllChatsLive);
             }
         }
     }
@@ -211,9 +345,47 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnRenameAccountClicked(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.SelectedAccount is not { } account)
+        {
+            return;
+        }
+
+        var dialog = new EditAccountWindow(
+            account.Profile,
+            _viewModel.Accounts.Select(item => item.Profile))
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() != true || dialog.ResultName is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _viewModel.RenameAccountAsync(
+                account,
+                dialog.ResultName,
+                _lifetime.Token);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or IOException
+                or UnauthorizedAccessException)
+        {
+            MessageBox.Show(
+                exception.Message,
+                "Profile name could not be saved",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
     private async void OnAccountSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_isLoaded)
+        if (!_isLoaded || _suppressSelectionEvents)
         {
             return;
         }
@@ -266,7 +438,7 @@ public partial class MainWindow : Window
         {
             foreach (var session in _chatSessions.Values)
             {
-                session.HideChat();
+                session.HideChat(_viewModel.KeepAllChatsLive);
             }
         }
     }
@@ -295,10 +467,73 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnPlayAccountSelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e)
+    {
+        if (!_isLoaded || _suppressSelectionEvents)
+        {
+            return;
+        }
+
+        try
+        {
+            await _viewModel.SaveAsync(_lifetime.Token);
+            if (_viewModel.SelectedPlayAccount is { } account)
+            {
+                _viewModel.StatusMessage = $"Games will launch with {account.DisplayName} selected";
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or OperationCanceledException)
+        {
+            if (exception is not OperationCanceledException)
+            {
+                _viewModel.StatusMessage = "The play-account choice could not be saved.";
+            }
+        }
+    }
+
+    private async void OnConversationSettingsChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_isLoaded)
+        {
+            return;
+        }
+
+        try
+        {
+            await _viewModel.SaveAsync(_lifetime.Token);
+            ApplyNotificationSettings();
+            if (_viewModel.KeepAllChatsLive)
+            {
+                await InitializeChatSessionsAsync();
+            }
+            else
+            {
+                ShowSelectedChat();
+                _viewModel.StatusMessage =
+                    "Background chats will sleep until selected";
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or OperationCanceledException)
+        {
+            if (exception is not OperationCanceledException)
+            {
+                _viewModel.StatusMessage = "Conversation settings could not be saved.";
+            }
+        }
+    }
+
     private void OnPlayClicked(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: InstalledGame game }
-            || _viewModel.SelectedAccount is not { } account)
+            || _viewModel.SelectedPlayAccount is not { } account)
         {
             return;
         }
@@ -446,15 +681,9 @@ public partial class MainWindow : Window
         try
         {
             await _viewModel.MarkAccountDeletionPendingAsync(account, _lifetime.Token);
-            var session = await EnsureChatSessionAsync(
-                account,
-                forProfileCleanup: true);
-            await session.ClearSessionAsync();
-            _chatSessions.Remove(account.Id);
-            ChatSessionContainer.Children.Remove(session);
-            session.Dispose();
-
-            await _viewModel.RemoveAccountAsync(account, _lifetime.Token);
+            _viewModel.ClearNotifications(account.Id);
+            PurgeWindowsNotifications(account.Id);
+            await CompletePendingProfileDeletionAsync(account);
             ShowSelectedChat();
         }
         catch (Exception exception) when (
@@ -475,6 +704,9 @@ public partial class MainWindow : Window
     {
         if (_viewModel.Accounts.Count == 0)
         {
+            _viewModel.NativeSteamAccountState = NativeSteamAccountState.NoProfiles;
+            _viewModel.CurrentSteamAccountStatus =
+                "Current in Steam: add a Switchboard account first";
             return;
         }
 
@@ -487,37 +719,377 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(steamExecutable)
             || !GameLaunchService.IsSteamRunning(steamExecutable))
         {
+            _viewModel.NativeSteamAccountState = NativeSteamAccountState.SteamNotRunning;
+            _viewModel.CurrentSteamAccountStatus =
+                "Current in Steam: Steam is not running";
+            _viewModel.NotifyCurrentPlayAccountChanged();
             return;
         }
 
         var steamRoot = Path.GetDirectoryName(steamExecutable);
         if (string.IsNullOrWhiteSpace(steamRoot))
         {
+            _viewModel.NativeSteamAccountState = NativeSteamAccountState.Unknown;
+            _viewModel.CurrentSteamAccountStatus =
+                "Current in Steam: not detected";
+            _viewModel.NotifyCurrentPlayAccountChanged();
             return;
         }
 
         var activeAccount = new SteamClientAccountService().FindActiveAccount(steamRoot);
+        if (activeAccount is null)
+        {
+            _viewModel.NativeSteamAccountState = NativeSteamAccountState.Unknown;
+            _viewModel.CurrentSteamAccountStatus =
+                "Current in Steam: sign-in not detected";
+            _viewModel.NotifyCurrentPlayAccountChanged();
+            return;
+        }
+
         var match = _viewModel.Accounts.FirstOrDefault(account =>
             string.Equals(
                 account.SteamLoginName,
-                activeAccount?.AccountName,
+                activeAccount.AccountName,
                 StringComparison.OrdinalIgnoreCase));
         if (match is not null)
         {
             match.IsCurrentPlayAccount = true;
+            _viewModel.NativeSteamAccountState = NativeSteamAccountState.Match;
+            _viewModel.CurrentSteamAccountStatus =
+                $"Current in Steam: {match.DisplayName} (@{match.SteamLoginName})";
         }
+        else
+        {
+            _viewModel.NativeSteamAccountState = NativeSteamAccountState.Mismatch;
+            _viewModel.CurrentSteamAccountStatus =
+                $"Current in Steam: {activeAccount.PersonaName} (@{activeAccount.AccountName}), not in Switchboard";
+        }
+
+        _viewModel.NotifyCurrentPlayAccountChanged();
+    }
+
+    private void InitializeNotificationIcon()
+    {
+        try
+        {
+            var processPath = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(processPath))
+            {
+                return;
+            }
+
+            _notificationTrayIcon = System.Drawing.Icon.ExtractAssociatedIcon(processPath);
+            if (_notificationTrayIcon is null)
+            {
+                return;
+            }
+
+            _notificationIcon.Icon = _notificationTrayIcon;
+            _notificationIcon.BalloonTipClicked += OnNotificationBalloonClicked;
+            _notificationIcon.DoubleClick += OnNotificationIconDoubleClicked;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or FileNotFoundException
+                or Win32Exception)
+        {
+            // In-app notifications remain available when Windows cannot create a tray icon.
+        }
+    }
+
+    private void OnChatNotificationReceived(
+        object? sender,
+        ChatNotificationEventArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(
+                () => HandleChatNotification(
+                    e.Account,
+                    e.Notification,
+                    e.ReportClicked,
+                    e.ReportClosed));
+            return;
+        }
+
+        HandleChatNotification(
+            e.Account,
+            e.Notification,
+            e.ReportClicked,
+            e.ReportClosed);
+    }
+
+    private void OnChatReadyWhileVisible(object? sender, EventArgs e)
+    {
+        if (sender is SteamChatSession session
+            && CanMarkSelectedChatRead(session.Account.Id))
+        {
+            MarkAccountRead(session.Account);
+        }
+    }
+
+    private void OnWindowActivated(object? sender, EventArgs e)
+    {
+        if (_isLoaded && _viewModel.SelectedSection == AppSection.Chats)
+        {
+            ShowSelectedChat();
+        }
+    }
+
+    private void HandleChatNotification(
+        AccountViewModel account,
+        ChatNotificationPayload payload,
+        Action? reportClicked,
+        Action? reportClosed)
+    {
+        if (!_viewModel.Accounts.Contains(account)
+            || _viewModel.IsAccountDeletionPending(account.Id))
+        {
+            reportClosed?.Invoke();
+            return;
+        }
+
+        var notification = _viewModel.AddNotification(
+            account,
+            payload,
+            reportClicked,
+            reportClosed);
+        var conversationIsVisible = IsActive
+            && WindowState != WindowState.Minimized
+            && _viewModel.SelectedSection == AppSection.Chats
+            && ReferenceEquals(_viewModel.SelectedAccount, account);
+        if (!conversationIsVisible)
+        {
+            account.UnreadCount = Math.Max(1, account.UnreadCount);
+            ShowWindowsNotification(notification);
+        }
+        else
+        {
+            MarkAccountRead(account);
+        }
+
+        _viewModel.StatusMessage =
+            $"Steam notification for {account.DisplayName}: {payload.SteamTitle}";
+    }
+
+    private bool CanMarkSelectedChatRead(Guid accountId) =>
+        IsActive
+        && WindowState != WindowState.Minimized
+        && _viewModel.SelectedSection == AppSection.Chats
+        && _viewModel.SelectedAccount?.Id == accountId;
+
+    private void MarkAccountRead(AccountViewModel account)
+    {
+        account.UnreadCount = 0;
+        _viewModel.MarkNotificationsRead(account.Id);
+    }
+
+    private void ShowWindowsNotification(ChatNotificationViewModel notification)
+    {
+        if (!_viewModel.EnableWindowsNotifications
+            || _notificationTrayIcon is null)
+        {
+            return;
+        }
+
+        while (_pendingBalloonNotifications.Count
+               >= MaximumQueuedWindowsNotifications)
+        {
+            _ = _pendingBalloonNotifications.Dequeue();
+        }
+
+        _pendingBalloonNotifications.Enqueue(new WindowsNotificationDelivery(
+            notification.AccountId,
+            notification.AccountDisplayName,
+            notification.AccountLoginName,
+            notification.SteamTitle,
+            notification.Preview));
+        ShowNextWindowsNotification();
+    }
+
+    private void ShowNextWindowsNotification()
+    {
+        if (_activeBalloonNotification is not null
+            || !_notificationIcon.Visible
+            || !_pendingBalloonNotifications.TryDequeue(out var notification))
+        {
+            return;
+        }
+
+        _activeBalloonNotification = notification;
+        var title = SafeText.SanitizeDisplayText(
+            $"{notification.AccountDisplayName} (@{notification.AccountLoginName}) • {notification.SteamTitle}",
+            "SteamSwitchboard message",
+            60);
+        _notificationIcon.ShowBalloonTip(
+            5_000,
+            title,
+            notification.Preview,
+            System.Windows.Forms.ToolTipIcon.Info);
+        _balloonReleaseTimer.Stop();
+        _balloonReleaseTimer.Interval = TimeSpan.FromSeconds(7);
+        _balloonReleaseTimer.Start();
+    }
+
+    private void OnNotificationsClicked(object sender, RoutedEventArgs e)
+    {
+        NotificationPopup.IsOpen = !NotificationPopup.IsOpen;
+    }
+
+    private void OnClearNotificationsClicked(object sender, RoutedEventArgs e)
+    {
+        _viewModel.ClearNotifications();
+        PurgeWindowsNotifications(accountId: null);
+        NotificationPopup.IsOpen = false;
+    }
+
+    private void PurgeWindowsNotifications(Guid? accountId)
+    {
+        var retained = _pendingBalloonNotifications
+            .Where(notification => accountId is not null
+                && notification.AccountId != accountId.Value)
+            .ToArray();
+        _pendingBalloonNotifications.Clear();
+        foreach (var notification in retained)
+        {
+            _pendingBalloonNotifications.Enqueue(notification);
+        }
+
+        var removeActive = _activeBalloonNotification is not null
+            && (accountId is null
+                || _activeBalloonNotification.AccountId == accountId.Value);
+        if (!removeActive)
+        {
+            return;
+        }
+
+        _activeBalloonNotification = null;
+        _balloonReleaseTimer.Stop();
+        var shouldRemainVisible = _viewModel.EnableWindowsNotifications
+            && _notificationTrayIcon is not null;
+        _notificationIcon.Visible = false;
+        _notificationIcon.Visible = shouldRemainVisible;
+        if (_pendingBalloonNotifications.Count > 0)
+        {
+            QueueNextWindowsNotification();
+        }
+    }
+
+    private async void OnNotificationClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: ChatNotificationViewModel notification })
+        {
+            notification.ReportClickedAndClose();
+            await OpenNotificationAsync(notification.AccountId);
+        }
+    }
+
+    private void OnNotificationBalloonClicked(object? sender, EventArgs e)
+    {
+        // Legacy NotifyIcon callbacks carry no notification identifier. A
+        // delayed callback must never be mapped to the timer-rotated delivery.
+        // The in-app center is authoritative and labels every account.
+        Dispatcher.BeginInvoke(OpenNotificationCenter);
+    }
+
+    private void OpenNotificationCenter()
+    {
+        ShowAndActivateWindow();
+        NotificationPopup.IsOpen = true;
+        NotificationsButton.Focus();
+    }
+
+    private void QueueNextWindowsNotification()
+    {
+        _balloonReleaseTimer.Stop();
+        _balloonReleaseTimer.Interval = TimeSpan.FromMilliseconds(500);
+        _balloonReleaseTimer.Start();
+    }
+
+    private void OnBalloonReleaseTimerTick(object? sender, EventArgs e)
+    {
+        _balloonReleaseTimer.Stop();
+        _activeBalloonNotification = null;
+        ShowNextWindowsNotification();
+    }
+
+    private void ApplyNotificationSettings()
+    {
+        _pendingBalloonNotifications.Clear();
+        _activeBalloonNotification = null;
+        _balloonReleaseTimer.Stop();
+        _notificationIcon.Visible = false;
+        _notificationIcon.Visible = _viewModel.EnableWindowsNotifications
+            && _notificationTrayIcon is not null;
+    }
+
+    private void OnNotificationIconDoubleClicked(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(ShowAndActivateWindow);
+    }
+
+    private async Task OpenNotificationAsync(Guid accountId)
+    {
+        var account = _viewModel.Accounts.FirstOrDefault(
+            item => item.Id == accountId);
+        if (account is null || _viewModel.IsAccountDeletionPending(account.Id))
+        {
+            return;
+        }
+
+        ShowAndActivateWindow();
+        NotificationPopup.IsOpen = false;
+        _viewModel.SelectedAccount = account;
+        NavigateTo(AppSection.Chats);
+        try
+        {
+            await EnsureChatSessionAsync(account);
+            ShowSelectedChat();
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or IOException)
+        {
+            _viewModel.StatusMessage = exception.Message;
+        }
+    }
+
+    private void ShowAndActivateWindow()
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Show();
+        Activate();
     }
 
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
         _playAccountTimer.Stop();
+        _balloonReleaseTimer.Stop();
         _lifetime.Cancel();
         foreach (var session in _chatSessions.Values)
         {
+            session.ChatNotificationReceived -= OnChatNotificationReceived;
+            session.ChatReadyWhileVisible -= OnChatReadyWhileVisible;
             session.Dispose();
         }
 
         _chatSessions.Clear();
+        _viewModel.ClearNotifications();
+        _pendingBalloonNotifications.Clear();
+        _activeBalloonNotification = null;
+        _notificationIcon.Visible = false;
+        _notificationIcon.Dispose();
+        _notificationTrayIcon?.Dispose();
         _lifetime.Dispose();
     }
+
+    private sealed record WindowsNotificationDelivery(
+        Guid AccountId,
+        string AccountDisplayName,
+        string AccountLoginName,
+        string SteamTitle,
+        string Preview);
 }

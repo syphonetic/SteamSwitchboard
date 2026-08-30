@@ -24,8 +24,68 @@ function Invoke-Checked {
     }
 }
 
+function Test-CleanLockedRestore {
+    $temporaryBase = [System.IO.Path]::GetFullPath(
+        [System.IO.Path]::GetTempPath())
+    $temporaryPrefix = $temporaryBase.TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar) +
+        [System.IO.Path]::DirectorySeparatorChar
+    $cleanCache = [System.IO.Path]::GetFullPath((Join-Path $temporaryBase (
+        "SteamSwitchboard-nuget-clean-$([Guid]::NewGuid().ToString('N'))")))
+    $hasExpectedName = [System.IO.Path]::GetFileName($cleanCache).StartsWith(
+        'SteamSwitchboard-nuget-clean-',
+        [System.StringComparison]::Ordinal)
+    if (-not $cleanCache.StartsWith(
+            $temporaryPrefix,
+            [System.StringComparison]::OrdinalIgnoreCase) `
+        -or -not $hasExpectedName) {
+        throw 'Refusing to use an unexpected clean-package-cache path.'
+    }
+
+    $previousPackageCache = [System.Environment]::GetEnvironmentVariable(
+        'NUGET_PACKAGES',
+        [System.EnvironmentVariableTarget]::Process)
+    try {
+        [System.IO.Directory]::CreateDirectory($cleanCache) | Out-Null
+        [System.Environment]::SetEnvironmentVariable(
+            'NUGET_PACKAGES',
+            $cleanCache,
+            [System.EnvironmentVariableTarget]::Process)
+        Invoke-Checked 'dotnet' @(
+            'restore',
+            $solution,
+            '--locked-mode',
+            '--no-http-cache',
+            '--force')
+    }
+    finally {
+        [System.Environment]::SetEnvironmentVariable(
+            'NUGET_PACKAGES',
+            $previousPackageCache,
+            [System.EnvironmentVariableTarget]::Process)
+        try {
+            # The clean restore writes package-folder locations into obj assets.
+            # Regenerate those files against the normal cache before continuing.
+            Invoke-Checked 'dotnet' @(
+                'restore',
+                $solution,
+                '--locked-mode',
+                '--force')
+        }
+        finally {
+            if ([System.IO.Directory]::Exists($cleanCache)) {
+                [System.IO.Directory]::Delete($cleanCache, $true)
+            }
+        }
+    }
+
+    Write-Host 'Clean-cache locked NuGet restore passed.'
+}
+
 Push-Location $projectRoot
 try {
+    Test-CleanLockedRestore
     & (Join-Path $PSScriptRoot 'verify.ps1') -Configuration $Configuration
 
     $vulnerabilityOutput = & dotnet list $solution package `
@@ -82,7 +142,39 @@ try {
                     $_.FullName -notmatch '[\\/](?:bin|obj)[\\/]'
                 } |
                 ForEach-Object { $_.FullName })
-        Invoke-Checked $semgrep.Source ($semgrepArguments + $scanTargets)
+        $temporaryBase = [System.IO.Path]::GetFullPath(
+            [System.IO.Path]::GetTempPath())
+        $semgrepWorkingDirectory = [System.IO.Path]::GetFullPath((
+            Join-Path $temporaryBase (
+                "SteamSwitchboard-semgrep-$([Guid]::NewGuid().ToString('N'))")))
+        $temporaryPrefix = $temporaryBase.TrimEnd(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar) +
+            [System.IO.Path]::DirectorySeparatorChar
+        if (-not $semgrepWorkingDirectory.StartsWith(
+                $temporaryPrefix,
+                [System.StringComparison]::OrdinalIgnoreCase) `
+            -or -not [System.IO.Path]::GetFileName(
+                $semgrepWorkingDirectory).StartsWith(
+                    'SteamSwitchboard-semgrep-',
+                    [System.StringComparison]::Ordinal)) {
+            throw 'Refusing to use an unexpected Semgrep working directory.'
+        }
+
+        [System.IO.Directory]::CreateDirectory(
+            $semgrepWorkingDirectory) | Out-Null
+        Push-Location $semgrepWorkingDirectory
+        try {
+            Invoke-Checked $semgrep.Source ($semgrepArguments + $scanTargets)
+        }
+        finally {
+            Pop-Location
+            if ([System.IO.Directory]::Exists($semgrepWorkingDirectory)) {
+                [System.IO.Directory]::Delete(
+                    $semgrepWorkingDirectory,
+                    $true)
+            }
+        }
     }
     elseif ($RequireExternalScanners) {
         throw 'Semgrep is required but was not found.'

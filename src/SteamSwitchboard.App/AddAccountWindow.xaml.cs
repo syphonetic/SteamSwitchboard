@@ -12,6 +12,7 @@ public partial class AddAccountWindow : Window
     public AddAccountWindow(IEnumerable<AccountProfile> existingAccounts)
     {
         InitializeComponent();
+        WindowSizing.ClampToCurrentWorkArea(this);
         _existingAccounts = existingAccounts?.ToArray()
             ?? throw new ArgumentNullException(nameof(existingAccounts));
         Loaded += (_, _) => DisplayNameTextBox.Focus();

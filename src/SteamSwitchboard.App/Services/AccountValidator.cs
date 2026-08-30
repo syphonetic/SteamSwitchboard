@@ -5,12 +5,20 @@ namespace SteamSwitchboard.Services;
 public static class AccountValidator
 {
     private const int MaximumNameLength = 64;
+    public const int MaximumAccountProfiles = 512;
     public const string DefaultAccentHex = "#66C0F4";
 
     public static string? Validate(AccountProfile account, IEnumerable<AccountProfile> existingAccounts)
     {
         ArgumentNullException.ThrowIfNull(account);
         ArgumentNullException.ThrowIfNull(existingAccounts);
+
+        var existing = existingAccounts as IReadOnlyCollection<AccountProfile>
+            ?? existingAccounts.ToArray();
+        if (existing.Count >= MaximumAccountProfiles)
+        {
+            return $"Switchboard supports up to {MaximumAccountProfiles} saved profiles on one PC.";
+        }
 
         if (account.Id == Guid.Empty)
         {
@@ -38,15 +46,15 @@ public static class AccountValidator
             return "The profile color is not valid.";
         }
 
-        if (existingAccounts.Any(existing => existing.Id == account.Id))
+        if (existing.Any(item => item.Id == account.Id))
         {
             return "That local profile identifier is already in Switchboard.";
         }
 
-        if (existingAccounts.Any(existing =>
-                !string.IsNullOrWhiteSpace(existing.SteamLoginName)
+        if (existing.Any(item =>
+                !string.IsNullOrWhiteSpace(item.SteamLoginName)
                 && string.Equals(
-                    existing.SteamLoginName.Trim(),
+                    item.SteamLoginName.Trim(),
                     account.SteamLoginName.Trim(),
                     StringComparison.OrdinalIgnoreCase)))
         {

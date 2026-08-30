@@ -12,18 +12,27 @@ public static class PersistedStateValidator
         state.Accounts ??= [];
         state.Settings ??= new AppSettings();
         state.PendingBrowserProfileDeletionIds ??= [];
+        if (state.Accounts.Count > AccountValidator.MaximumAccountProfiles)
+        {
+            throw new InvalidDataException(
+                $"The settings contain more than {AccountValidator.MaximumAccountProfiles} account profiles.");
+        }
 
         var validatedAccounts = new List<AccountProfile>(state.Accounts.Count);
         var accountIds = new HashSet<Guid>();
+        var accountNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var account in state.Accounts)
         {
-            if (account is null || !accountIds.Add(account.Id))
+            if (account is null
+                || !accountIds.Add(account.Id)
+                || !accountNames.Add(account.SteamLoginName?.Trim() ?? string.Empty))
             {
-                throw new InvalidDataException("The settings contain duplicate or missing account identifiers.");
+                throw new InvalidDataException(
+                    "The settings contain duplicate or missing account identities.");
             }
 
             AccountValidator.Normalize(account);
-            if (AccountValidator.Validate(account, validatedAccounts) is not null)
+            if (AccountValidator.Validate(account, Array.Empty<AccountProfile>()) is not null)
             {
                 throw new InvalidDataException("The settings contain an invalid account profile.");
             }
@@ -35,6 +44,11 @@ public static class PersistedStateValidator
         if (state.LastSelectedAccountId is { } selectedId && !accountIds.Contains(selectedId))
         {
             state.LastSelectedAccountId = null;
+        }
+
+        if (state.LastPlayAccountId is { } playAccountId && !accountIds.Contains(playAccountId))
+        {
+            state.LastPlayAccountId = null;
         }
 
         var pendingDeletionIds = new HashSet<Guid>();

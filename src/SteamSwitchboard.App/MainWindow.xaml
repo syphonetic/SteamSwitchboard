@@ -12,6 +12,7 @@
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
         Loaded="OnWindowLoaded"
+        Activated="OnWindowActivated"
         Closing="OnWindowClosing">
     <Window.Resources>
         <Style x:Key="PageStyle" TargetType="Grid">
@@ -61,7 +62,7 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusStyle}" />
-            <Setter Property="AutomationProperties.Name" Value="{Binding DisplayName}" />
+            <Setter Property="AutomationProperties.Name" Value="{Binding PlayAccountLabel}" />
             <Setter Property="AutomationProperties.HelpText" Value="{Binding StatusText}" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -86,7 +87,7 @@
         </Style>
     </Window.Resources>
 
-    <Grid Background="{StaticResource BackgroundBrush}">
+    <Grid x:Name="RootLayout" Background="{StaticResource BackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="68" />
             <RowDefinition Height="*" />
@@ -99,20 +100,17 @@
                 BorderThickness="0,0,0,1">
             <Grid Margin="22,0">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="285" />
+                    <ColumnDefinition Width="250" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Width="38" Height="38" Background="{StaticResource AccentStrongBrush}" CornerRadius="11">
-                        <TextBlock HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   FontSize="20"
-                                   FontWeight="Bold"
-                                   Foreground="White"
-                                   Text="S" />
-                    </Border>
+                    <Image Width="40"
+                           Height="40"
+                           Source="{StaticResource AppIcon}"
+                           Stretch="Uniform"
+                           AutomationProperties.Name="SteamSwitchboard logo" />
                     <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                         <TextBlock FontSize="17" FontWeight="SemiBold" Text="SteamSwitchboard" />
                         <TextBlock Style="{StaticResource MutedText}" FontSize="11" Text="UNOFFICIAL COMPANION" />
@@ -142,17 +140,137 @@
                             Style="{StaticResource QuietButton}" />
                 </StackPanel>
 
-                <Border Grid.Column="2"
-                        Padding="12,7"
-                        Background="#102738"
-                        BorderBrush="#24506B"
-                        BorderThickness="1"
-                        CornerRadius="16"
-                        VerticalAlignment="Center">
-                    <TextBlock Foreground="{StaticResource AccentBrush}"
-                               FontSize="12"
-                               Text="Passwords stay with Steam" />
-                </Border>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Grid>
+                        <Button x:Name="NotificationsButton"
+                                MinWidth="120"
+                                Margin="0,0,10,0"
+                                Click="OnNotificationsClicked"
+                                AutomationProperties.Name="Open chat notifications"
+                                Style="{StaticResource SecondaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Notifications" />
+                                <Border MinWidth="22"
+                                        Height="22"
+                                        Margin="8,0,0,0"
+                                        Padding="5,0"
+                                        Background="{StaticResource AccentStrongBrush}"
+                                        CornerRadius="11"
+                                        Visibility="{Binding HasUnreadNotifications, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <TextBlock HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               FontSize="10"
+                                               FontWeight="Bold"
+                                               Foreground="White"
+                                               Text="{Binding NotificationCountLabel}" />
+                                </Border>
+                            </StackPanel>
+                        </Button>
+
+                        <Popup x:Name="NotificationPopup"
+                               Placement="Bottom"
+                               PlacementTarget="{Binding ElementName=NotificationsButton}"
+                               StaysOpen="False"
+                               AllowsTransparency="True">
+                            <Border Width="410"
+                                    MaxHeight="520"
+                                    Margin="0,8,0,0"
+                                    Padding="16"
+                                    Background="#132236"
+                                    BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="12">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <Grid Margin="2,0,2,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock FontSize="17" FontWeight="SemiBold" Text="Chat notifications" />
+                                            <TextBlock Margin="0,3,0,0"
+                                                       Style="{StaticResource MutedText}"
+                                                       Text="Receiving account and Steam-provided notification title are shown. Message previews are optional." />
+                                        </StackPanel>
+                                        <Button Grid.Column="1"
+                                                MinWidth="70"
+                                                Content="Clear"
+                                                IsEnabled="{Binding HasNotifications}"
+                                                Click="OnClearNotificationsClicked"
+                                                Style="{StaticResource QuietButton}" />
+                                    </Grid>
+
+                                    <Grid Grid.Row="1">
+                                        <ScrollViewer MaxHeight="400" VerticalScrollBarVisibility="Auto">
+                                            <ItemsControl ItemsSource="{Binding Notifications}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Margin="0,0,0,8"
+                                                                Padding="12"
+                                                                HorizontalContentAlignment="Stretch"
+                                                                Tag="{Binding}"
+                                                                Click="OnNotificationClicked"
+                                                                Style="{StaticResource SecondaryButton}">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*" />
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                </Grid.ColumnDefinitions>
+                                                                <StackPanel>
+                                                                    <TextBlock FontWeight="SemiBold"
+                                                                               Text="{Binding Heading}"
+                                                                               TextTrimming="CharacterEllipsis" />
+                                                                    <TextBlock Margin="0,4,12,0"
+                                                                               Style="{StaticResource MutedText}"
+                                                                               Text="{Binding Preview}"
+                                                                               TextTrimming="CharacterEllipsis"
+                                                                               TextWrapping="NoWrap" />
+                                                                </StackPanel>
+                                                                <TextBlock Grid.Column="1"
+                                                                           Style="{StaticResource MutedText}"
+                                                                           Text="{Binding ReceivedTime}" />
+                                                            </Grid>
+                                                        </Button>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+
+                                        <TextBlock HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   Text="No chat notifications yet">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasNotifications}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                </Grid>
+                            </Border>
+                        </Popup>
+                    </Grid>
+
+                    <Border Padding="12,7"
+                            Background="#102738"
+                            BorderBrush="#24506B"
+                            BorderThickness="1"
+                            CornerRadius="16"
+                            VerticalAlignment="Center">
+                        <TextBlock Foreground="{StaticResource AccentBrush}"
+                                   FontSize="12"
+                                   Text="Passwords stay with Steam" />
+                    </Border>
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -242,7 +360,12 @@
                                             <TextBlock Margin="0,2,0,0"
                                                        Style="{StaticResource MutedText}"
                                                        FontSize="11"
-                                                       Text="{Binding StatusText}" />
+                                                       TextTrimming="CharacterEllipsis">
+                                                <Run Text="@" />
+                                                <Run Text="{Binding SteamLoginName, Mode=OneWay}" />
+                                                <Run Text="  •  " />
+                                                <Run Text="{Binding StatusText, Mode=OneWay}" />
+                                            </TextBlock>
                                         </StackPanel>
 
                                         <Border Grid.Column="2"
@@ -286,7 +409,7 @@
                                 Background="{StaticResource SurfaceBrush}"
                                 CornerRadius="12"
                                 Visibility="{Binding IsSelectedAccountPendingDeletion, Converter={StaticResource BooleanToVisibilityConverter}}">
-                            <StackPanel Width="430"
+                            <StackPanel MaxWidth="220"
                                         HorizontalAlignment="Center"
                                         VerticalAlignment="Center"
                                         TextBlock.TextAlignment="Center">
@@ -334,6 +457,7 @@
                         </StackPanel>
 
                         <Border Grid.Column="1"
+                                MaxWidth="310"
                                 Padding="14,9"
                                 Background="{StaticResource SurfaceBrush}"
                                 BorderBrush="{StaticResource BorderBrush}"
@@ -341,13 +465,23 @@
                                 CornerRadius="10"
                                 VerticalAlignment="Center"
                                 Visibility="{Binding HasSelectedAccount, Converter={StaticResource BooleanToVisibilityConverter}}">
-                            <StackPanel Orientation="Horizontal">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <Ellipse Width="9"
                                          Height="9"
                                          Margin="0,0,8,0"
                                          Fill="{Binding SelectedAccount.AccentHex, Converter={StaticResource HexToBrushConverter}}" />
                                 <TextBlock Foreground="{StaticResource MutedTextBrush}" Text="Workspace " />
-                                <TextBlock FontWeight="SemiBold" Text="{Binding SelectedAccount.DisplayName}" />
+                                <TextBlock MaxWidth="150"
+                                           FontWeight="SemiBold"
+                                           Text="{Binding SelectedAccount.DisplayName}"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding SelectedAccount.DisplayName}" />
+                                <Button Margin="10,0,0,0"
+                                        Padding="7,3"
+                                        Content="Rename"
+                                        Click="OnRenameAccountClicked"
+                                        AutomationProperties.Name="Rename selected account label"
+                                        Style="{StaticResource QuietButton}" />
                             </StackPanel>
                         </Border>
                     </Grid>
@@ -408,12 +542,10 @@
                                 Style="{StaticResource SecondaryButton}" />
                     </Grid>
 
-                    <Grid Grid.Row="1" Margin="4,0,4,14">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Width="360" HorizontalAlignment="Left">
+                    <WrapPanel Grid.Row="1"
+                               Margin="4,0,4,14"
+                               HorizontalAlignment="Stretch">
+                        <StackPanel Width="330" Margin="0,0,18,10">
                             <TextBlock Margin="0,0,0,5"
                                        Style="{StaticResource MutedText}"
                                        FontSize="11"
@@ -422,22 +554,30 @@
                                      Text="{Binding GameSearch, UpdateSourceTrigger=PropertyChanged}"
                                      ToolTip="Search by game name or App ID" />
                         </StackPanel>
-                        <Border Grid.Column="1"
-                                Padding="14,9"
-                                Background="#102738"
-                                BorderBrush="#24506B"
-                                BorderThickness="1"
-                                CornerRadius="10"
-                                VerticalAlignment="Center"
-                                Visibility="{Binding HasSelectedAccount, Converter={StaticResource BooleanToVisibilityConverter}}">
-                            <TextBlock>
-                                <Run Foreground="{StaticResource MutedTextBrush}" Text="Play account: " />
-                                <Run FontWeight="SemiBold"
-                                     Foreground="{StaticResource AccentBrush}"
-                                     Text="{Binding SelectedAccount.DisplayName, Mode=OneWay}" />
-                            </TextBlock>
-                        </Border>
-                    </Grid>
+                        <StackPanel Width="300"
+                                    Margin="0,0,0,10"
+                                    Visibility="{Binding HasAccounts, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <TextBlock Margin="0,0,0,5"
+                                       Style="{StaticResource MutedText}"
+                                       FontSize="11"
+                                       Text="Play account" />
+                            <ComboBox AutomationProperties.Name="Play account"
+                                      ItemsSource="{Binding Accounts}"
+                                      SelectedItem="{Binding SelectedPlayAccount, Mode=TwoWay}"
+                                      DisplayMemberPath="PlayAccountLabel"
+                                      ToolTip="{Binding SelectedPlayAccount.PlayAccountLabel}"
+                                      SelectionChanged="OnPlayAccountSelectionChanged">
+                            </ComboBox>
+                            <TextBlock Margin="0,5,0,0"
+                                       Style="{StaticResource MutedText}"
+                                       FontSize="10"
+                                       Text="{Binding SelectedPlayAccountStatus}" />
+                            <TextBlock Margin="0,3,0,0"
+                                       Style="{StaticResource MutedText}"
+                                       FontSize="10"
+                                       Text="{Binding CurrentSteamAccountStatus}" />
+                        </StackPanel>
+                    </WrapPanel>
 
                     <Grid Grid.Row="2">
                         <ListBox ItemsSource="{Binding GamesView}"
@@ -505,12 +645,12 @@
                                                     MinWidth="145"
                                                     Tag="{Binding}"
                                                     Click="OnPlayClicked"
-                                                    AutomationProperties.Name="{Binding DataContext.SelectedAccount.DisplayName, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay, StringFormat=Play as {0}}"
-                                                    IsEnabled="{Binding DataContext.HasSelectedAccount, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    AutomationProperties.Name="{Binding DataContext.SelectedPlayAccount.PlayAccountLabel, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay, StringFormat=Play as {0}}"
+                                                    IsEnabled="{Binding DataContext.HasSelectedPlayAccount, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     Style="{StaticResource PrimaryButton}">
-                                                <TextBlock>
+                                                <TextBlock MaxWidth="220" TextTrimming="CharacterEllipsis">
                                                     <Run Text="Play as " />
-                                                    <Run Text="{Binding DataContext.SelectedAccount.DisplayName, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}" />
+                                                    <Run Text="{Binding DataContext.SelectedPlayAccount.PlayAccountLabel, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}" />
                                                 </TextBlock>
                                             </Button>
                                         </Grid>
@@ -537,6 +677,27 @@
                                     Click="OnSettingsNavClicked"
                                     Style="{StaticResource SecondaryButton}" />
                         </StackPanel>
+
+                        <Border Style="{StaticResource EmptyWhenTrue}"
+                                Background="{StaticResource BackgroundBrush}">
+                            <StackPanel Width="420"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        TextBlock.TextAlignment="Center">
+                                <TextBlock FontSize="48" Foreground="{StaticResource AccentBrush}" Text="＋" />
+                                <TextBlock Margin="0,14,0,0"
+                                           FontSize="20"
+                                           FontWeight="SemiBold"
+                                           Text="Add an account before launching games" />
+                                <TextBlock Margin="0,8,0,18"
+                                           Style="{StaticResource MutedText}"
+                                           Text="Each game launch needs a named Steam account to verify." />
+                                <Button Width="150"
+                                        Content="Add account"
+                                        Click="OnAddAccountClicked"
+                                        Style="{StaticResource PrimaryButton}" />
+                            </StackPanel>
+                        </Border>
                     </Grid>
                 </Grid>
 
@@ -553,8 +714,10 @@
                                    Text="Clear controls, local data, and honest Steam compatibility." />
                     </StackPanel>
 
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                        <StackPanel MaxWidth="850" HorizontalAlignment="Left">
+                    <ScrollViewer Grid.Row="1"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="850" HorizontalAlignment="Stretch">
                             <Border Margin="0,0,0,14" Style="{StaticResource CardBorder}">
                                 <StackPanel>
                                     <TextBlock Style="{StaticResource SubheadingText}" Text="Steam installation" />
@@ -589,6 +752,32 @@
                                             </Style>
                                         </TextBlock.Style>
                                     </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,0,0,14" Style="{StaticResource CardBorder}">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource SubheadingText}" Text="Conversations &amp; notifications" />
+                                    <TextBlock Margin="0,6,0,12"
+                                               Style="{StaticResource MutedText}"
+                                               Text="Keep every account reachable and control how much appears in Windows notifications." />
+                                    <CheckBox Content="Keep open account chats connected (up to 16; uses more memory)"
+                                              IsChecked="{Binding KeepAllChatsLive, Mode=TwoWay}"
+                                              Checked="OnConversationSettingsChanged"
+                                              Unchecked="OnConversationSettingsChanged" />
+                                    <CheckBox Margin="0,6,0,0"
+                                              Content="Show Windows chat notifications"
+                                              IsChecked="{Binding EnableWindowsNotifications, Mode=TwoWay}"
+                                              Checked="OnConversationSettingsChanged"
+                                              Unchecked="OnConversationSettingsChanged" />
+                                    <CheckBox Margin="0,6,0,0"
+                                              Content="Show message previews in notification history and Windows alerts"
+                                              IsChecked="{Binding ShowNotificationPreviews, Mode=TwoWay}"
+                                              Checked="OnConversationSettingsChanged"
+                                              Unchecked="OnConversationSettingsChanged" />
+                                    <TextBlock Margin="0,8,0,0"
+                                               Style="{StaticResource MutedText}"
+                                               Text="The receiving account and Steam-provided notification title are always shown in history. History stays in memory and is cleared when Switchboard exits." />
                                 </StackPanel>
                             </Border>
 
@@ -636,7 +825,7 @@
                                 </StackPanel>
                             </Border>
 
-                            <Border Style="{StaticResource CardBorder}">
+                            <Border Margin="0,0,0,14" Style="{StaticResource CardBorder}">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -648,12 +837,45 @@
                                                    Style="{StaticResource MutedText}"
                                                    Text="Forgetting an account clears its local Steam web session from this PC." />
                                     </StackPanel>
-                                    <Button Grid.Column="1"
-                                            MinWidth="150"
-                                            Content="Forget account…"
-                                            Click="OnForgetAccountClicked"
-                                            IsEnabled="{Binding HasSelectedAccount}"
-                                            Style="{StaticResource DangerButton}" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                        <Button MinWidth="140"
+                                                Margin="0,0,10,0"
+                                                Content="Rename profile…"
+                                                Click="OnRenameAccountClicked"
+                                                IsEnabled="{Binding HasSelectedAccount}"
+                                                Style="{StaticResource SecondaryButton}" />
+                                        <Button MinWidth="150"
+                                                Content="Forget account…"
+                                                Click="OnForgetAccountClicked"
+                                                IsEnabled="{Binding HasSelectedAccount}"
+                                                Style="{StaticResource DangerButton}" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <Border Style="{StaticResource CardBorder}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="124" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Image Width="104"
+                                           Height="104"
+                                           HorizontalAlignment="Left"
+                                           Source="Assets/Branding/SteamSwitchboard-app-logo.png"
+                                           Stretch="Uniform"
+                                           AutomationProperties.Name="SteamSwitchboard brand mark" />
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource SubheadingText}" Text="SteamSwitchboard" />
+                                        <TextBlock Margin="0,5,0,0"
+                                                   Foreground="{StaticResource AccentBrush}"
+                                                   FontWeight="SemiBold"
+                                                   Text="{Binding VersionLabel}" />
+                                        <TextBlock Margin="0,8,0,0"
+                                                   Style="{StaticResource MutedText}"
+                                                   TextWrapping="Wrap"
+                                                   Text="A local-first account workspace for Steam conversations and verified game launches." />
+                                    </StackPanel>
                                 </Grid>
                             </Border>
 
@@ -676,7 +898,7 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse Width="7" Height="7" Margin="0,0,8,0" Fill="{StaticResource SuccessBrush}" />
+                    <Ellipse Width="7" Height="7" Margin="0,0,8,0" Fill="{StaticResource AccentBrush}" />
                     <TextBlock Style="{StaticResource MutedText}"
                                FontSize="11"
                                Text="{Binding StatusMessage}"

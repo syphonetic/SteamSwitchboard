@@ -39,6 +39,18 @@ foreach ($component in $relativeDirectory.Split(
 }
 [System.IO.Directory]::CreateDirectory($outputDirectory) | Out-Null
 
+$brandSourcePath = [System.IO.Path]::GetFullPath((Join-Path $expectedRoot (
+    'src\SteamSwitchboard.App\Assets\Branding\SteamSwitchboard-app-logo.png')))
+if (-not (Test-Path -LiteralPath $brandSourcePath -PathType Leaf)) {
+    throw 'The committed SteamSwitchboard brand image is missing.'
+}
+$brandSource = [System.Windows.Media.Imaging.BitmapImage]::new()
+$brandSource.BeginInit()
+$brandSource.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+$brandSource.UriSource = [Uri]$brandSourcePath
+$brandSource.EndInit()
+$brandSource.Freeze()
+
 function New-IconPng {
     param([Parameter(Mandatory)][int]$Size)
 
@@ -105,11 +117,50 @@ function New-IconPng {
     }
 }
 
+function New-BrandIconPng {
+    param([Parameter(Mandatory)][int]$Size)
+
+    $visual = [System.Windows.Media.DrawingVisual]::new()
+    $drawing = $visual.RenderOpen()
+    try {
+        $drawing.DrawImage(
+            $brandSource,
+            [System.Windows.Rect]::new(0, 0, $Size, $Size))
+    }
+    finally {
+        $drawing.Close()
+    }
+
+    $bitmap = [System.Windows.Media.Imaging.RenderTargetBitmap]::new(
+        $Size,
+        $Size,
+        96,
+        96,
+        [System.Windows.Media.PixelFormats]::Pbgra32)
+    $bitmap.Render($visual)
+
+    $encoder = [System.Windows.Media.Imaging.PngBitmapEncoder]::new()
+    $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
+    $stream = [System.IO.MemoryStream]::new()
+    try {
+        $encoder.Save($stream)
+        return $stream.ToArray()
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 $sizes = @(16, 24, 32, 48, 64, 128, 256)
 $images = foreach ($size in $sizes) {
     [pscustomobject]@{
         Size = $size
-        Data = New-IconPng -Size $size
+        Data = if ($size -le 48) {
+            New-IconPng -Size $size
+        }
+        else {
+            New-BrandIconPng -Size $size
+        }
     }
 }
 

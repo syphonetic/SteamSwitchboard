@@ -124,6 +124,12 @@ public sealed class StateStore
                 throw new InvalidDataException("The settings file uses an unsupported format.");
             }
 
+            if (state.SchemaVersion < 3 && state.LastPlayAccountId is null)
+            {
+                state.LastPlayAccountId = state.LastSelectedAccountId
+                    ?? state.Accounts.FirstOrDefault()?.Id;
+            }
+
             PersistedStateValidator.ValidateAndNormalize(state);
             state.SchemaVersion = PersistedState.CurrentSchemaVersion;
             return state;

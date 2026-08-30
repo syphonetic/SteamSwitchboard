@@ -113,4 +113,26 @@ public sealed class SteamClientAccountServiceTests
         Assert.AreEqual("Alice evil", account.PersonaName);
         Assert.IsFalse(account.PersonaName.Contains('\u202E', StringComparison.Ordinal));
     }
+
+    [TestMethod]
+    public void LoadAccounts_RejectsDuplicateLoginNamesForDifferentSteamIds()
+    {
+        using var temporary = new TemporaryDirectory();
+        var steamRoot = temporary.CreateDirectory("Steam");
+        var config = temporary.CreateDirectory("Steam", "config");
+        File.WriteAllText(
+            System.IO.Path.Combine(config, "loginusers.vdf"),
+            """
+            "users"
+            {
+                "76561197960265729" { "AccountName" "same_name" "PersonaName" "First" }
+                "76561197960265730" { "AccountName" "SAME_NAME" "PersonaName" "Second" }
+            }
+            """);
+
+        var accounts = new SteamClientAccountService(() => 1)
+            .LoadAccounts(steamRoot);
+
+        Assert.IsEmpty(accounts);
+    }
 }

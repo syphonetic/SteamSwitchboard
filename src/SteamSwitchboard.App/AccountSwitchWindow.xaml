@@ -5,10 +5,10 @@
         Icon="{StaticResource AppIcon}"
         Background="{StaticResource BackgroundBrush}"
         Width="590"
-        Height="430"
-        MinWidth="540"
-        MinHeight="400"
-        ResizeMode="NoResize"
+        Height="500"
+        MinWidth="420"
+        MinHeight="350"
+        ResizeMode="CanResizeWithGrip"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False">
     <Grid Margin="32" Background="{StaticResource BackgroundBrush}">
@@ -22,18 +22,44 @@
             <TextBlock Text="One quick check in Steam" Style="{StaticResource HeadingText}" />
             <TextBlock Margin="0,8,0,0"
                        Style="{StaticResource MutedText}"
+                       TextWrapping="Wrap"
                        Text="Steam's desktop client supports one account at a time. Switchboard will wait and launch only after the correct account is active." />
         </StackPanel>
 
-        <Border Grid.Row="1" Margin="0,26,0,22" Style="{StaticResource CardBorder}">
+        <ScrollViewer Grid.Row="1"
+                      Margin="0,26,0,22"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+        <Border Margin="0,0,12,0" Style="{StaticResource CardBorder}">
             <StackPanel VerticalAlignment="Center">
                 <TextBlock x:Name="InstructionText"
                            FontSize="17"
                            FontWeight="SemiBold"
+                           TextWrapping="Wrap"
                            TextAlignment="Center" />
+                <Border Margin="18,18,18,0"
+                        Padding="14"
+                        Background="#0C1725"
+                        CornerRadius="9">
+                    <StackPanel>
+                        <TextBlock x:Name="RequiredAccountText"
+                                   FontWeight="SemiBold"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="CurrentAccountText"
+                                   Margin="0,7,0,0"
+                                   Style="{StaticResource MutedText}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="LaunchArmedText"
+                                   Margin="0,7,0,0"
+                                   Foreground="{StaticResource AccentBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Automatic launch armed — Cancel stops it." />
+                    </StackPanel>
+                </Border>
                 <TextBlock x:Name="StatusText"
                            Margin="0,14,0,0"
                            Foreground="{StaticResource WarningBrush}"
+                           TextWrapping="Wrap"
                            TextAlignment="Center"
                            AutomationProperties.LiveSetting="Polite" />
                 <ProgressBar x:Name="WaitingProgress"
@@ -43,21 +69,23 @@
                 <TextBlock Margin="0,22,0,0"
                            Style="{StaticResource MutedText}"
                            TextAlignment="Center"
-                           Text="Your Switchboard chat sessions remain signed in while Steam changes its play account." />
+                           TextWrapping="Wrap"
+                           Text="Switchboard chat workspaces are separate from Steam's desktop play account. After you switch in Steam, Switchboard verifies the exact active account and starts the game automatically." />
             </StackPanel>
         </Border>
+        </ScrollViewer>
 
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+        <WrapPanel Grid.Row="2" HorizontalAlignment="Right">
             <Button MinWidth="100"
                     Margin="0,0,10,0"
                     Content="Cancel"
                     IsCancel="True"
                     Style="{StaticResource SecondaryButton}" />
             <Button x:Name="OpenSteamButton"
-                    MinWidth="130"
-                    Content="Open Steam"
+                    MinWidth="220"
+                    Content="Open Steam to switch account"
                     Click="OnOpenSteamClicked"
                     Style="{StaticResource PrimaryButton}" />
-        </StackPanel>
+        </WrapPanel>
     </Grid>
 </Window>

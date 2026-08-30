@@ -98,11 +98,16 @@ $expectedEntries = @(
     "$expectedRootName/SteamSwitchboard.runtimeconfig.json",
     "$expectedRootName/README.md",
     "$expectedRootName/LICENSE",
+    "$expectedRootName/NOTICE.md",
     "$expectedRootName/SECURITY.md",
     "$expectedRootName/CHANGELOG.md",
+    "$expectedRootName/CONTRIBUTING.md",
     "$expectedRootName/docs/ARCHITECTURE.md",
+    "$expectedRootName/docs/GITHUB_RELEASE.md",
     "$expectedRootName/docs/PRIVACY.md",
-    "$expectedRootName/docs/VALIDATION.md"
+    "$expectedRootName/docs/VALIDATION.md",
+    "$expectedRootName/artifacts/ui-final.png",
+    "$expectedRootName/src/SteamSwitchboard.App/Assets/Branding/SteamSwitchboard-logo-v1.png"
 )
 
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem

@@ -8,5 +8,7 @@ public sealed class AppSettings
 
     public bool ShowNotificationPreviews { get; set; }
 
+    public bool EnableWindowsNotifications { get; set; } = true;
+
     public bool KeepAllChatsLive { get; set; } = true;
 }
