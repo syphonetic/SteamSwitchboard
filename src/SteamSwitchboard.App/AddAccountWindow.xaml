@@ -23,7 +23,7 @@
             <TextBlock Margin="0,8,0,0"
                        Style="{StaticResource MutedText}"
                        TextWrapping="Wrap"
-                       Text="Give the account a clear label. You will sign in directly on Steam's website after it is added." />
+                       Text="Choose a private nickname, then identify the matching Steam login. You will sign in directly on Steam's website after it is added." />
         </StackPanel>
 
         <ScrollViewer Grid.Row="1"
@@ -31,27 +31,31 @@
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="0,0,12,0">
-            <TextBlock Text="Switchboard label" FontWeight="SemiBold" />
+            <Label Target="{Binding ElementName=DisplayNameTextBox}" Content="_Profile nickname" />
             <TextBlock Margin="0,4,0,8"
                        Style="{StaticResource MutedText}"
                        TextWrapping="Wrap"
-                       Text="What you want to see in Switchboard, such as Main or Trading." />
+                       Text="A private, editable name shown only in Switchboard, such as Main or Trading." />
             <TextBox x:Name="DisplayNameTextBox"
                      MaxLength="64"
-                     AutomationProperties.Name="Switchboard profile name"
+                     AutomationProperties.Name="Profile nickname"
                      TextChanged="OnInputChanged" />
 
-            <TextBlock Margin="0,22,0,0" Text="Steam account name" FontWeight="SemiBold" />
+            <Label Margin="0,22,0,0"
+                   Target="{Binding ElementName=SteamLoginNameTextBox}"
+                   Content="_Steam login name" />
             <TextBlock Margin="0,4,0,8"
                        Style="{StaticResource MutedText}"
                        TextWrapping="Wrap"
-                       Text="The account name shown by Steam's account switcher—not your password or email." />
+                       Text="The exact login shown by Steam's account switcher—not your public Steam name, email, or password. It is linked to this profile for native launch checks and can be relinked later in Settings." />
             <TextBox x:Name="SteamLoginNameTextBox"
                      MaxLength="64"
-                     AutomationProperties.Name="Steam account name"
+                     AutomationProperties.Name="Steam login name"
                      TextChanged="OnInputChanged" />
 
-            <TextBlock Margin="0,22,0,8" Text="Profile color" FontWeight="SemiBold" />
+            <Label Margin="0,22,0,8"
+                   Target="{Binding ElementName=BlueAccent}"
+                   Content="Profile _color" />
             <StackPanel Orientation="Horizontal">
                 <RadioButton x:Name="BlueAccent" GroupName="Accent" IsChecked="True" Tag="#66C0F4" Margin="0,0,16,0" AutomationProperties.Name="Blue profile color">
                     <Ellipse Width="28" Height="28" Fill="#66C0F4" />

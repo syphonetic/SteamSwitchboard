@@ -13,6 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'path-utils.ps1')
 
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $projectFile = Join-Path $projectRoot 'src\SteamSwitchboard.App\SteamSwitchboard.App.csproj'
@@ -41,7 +42,9 @@ function New-DeterministicArchive {
     $relativePaths = [string[]]@(
         Get-ChildItem -LiteralPath $SourceDirectory -File -Recurse |
             ForEach-Object {
-                [System.IO.Path]::GetRelativePath($SourceDirectory, $_.FullName)
+                Get-ContainedRelativePath `
+                    -RootPath $SourceDirectory `
+                    -CandidatePath $_.FullName
             })
     [Array]::Sort($relativePaths, [System.StringComparer]::Ordinal)
 
@@ -189,8 +192,8 @@ try {
         -ChecksumPath $temporaryChecksum `
         -ExpectedVersion $version
 
-    [System.IO.File]::Move($temporaryArchive, $archivePath, $true)
-    [System.IO.File]::Move($temporaryChecksum, $checksumPath, $true)
+    Move-FileReplacing -SourcePath $temporaryArchive -DestinationPath $archivePath
+    Move-FileReplacing -SourcePath $temporaryChecksum -DestinationPath $checksumPath
 }
 finally {
     if ($null -ne $lockStream) {

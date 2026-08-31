@@ -55,6 +55,23 @@ public sealed class SteamLibraryServiceTests
     }
 
     [TestMethod]
+    public async Task LoadInstalledGames_UsesNeutralLabelWhenSizeIsUnavailable()
+    {
+        using var temporary = new TemporaryDirectory();
+        var steamRoot = temporary.CreateDirectory("Steam");
+        var steamApps = temporary.CreateDirectory("Steam", "steamapps");
+        _ = temporary.CreateDirectory("Steam", "steamapps", "common", "Utility");
+        File.WriteAllText(
+            System.IO.Path.Combine(steamApps, "appmanifest_10.acf"),
+            Manifest(10, "Utility", "Utility", 0));
+
+        var entries = await new SteamLibraryService().LoadInstalledGamesAsync(steamRoot);
+
+        Assert.HasCount(1, entries);
+        Assert.AreEqual("Size unavailable", entries[0].SizeLabel);
+    }
+
+    [TestMethod]
     public async Task LoadInstalledGames_RejectsManifestWhoseFilenameDoesNotMatchAppId()
     {
         using var temporary = new TemporaryDirectory();

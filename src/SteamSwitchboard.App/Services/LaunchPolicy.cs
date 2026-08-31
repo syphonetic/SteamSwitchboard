@@ -15,14 +15,14 @@ public static class LaunchPolicy
         {
             return new LaunchAssessment(
                 LaunchReadiness.InvalidAccount,
-                "Choose an account before starting a game.");
+                "Choose an account before starting a library item.");
         }
 
         if (game is null || !Directory.Exists(game.InstallDirectory))
         {
             return new LaunchAssessment(
                 LaunchReadiness.GameNotInstalled,
-                "Steam no longer reports this game as installed.");
+                "This application's local install folder is missing. Refresh the library and let Steam finish any install or update first.");
         }
 
         if (string.IsNullOrWhiteSpace(steamExecutable) || !File.Exists(steamExecutable))
@@ -36,14 +36,14 @@ public static class LaunchPolicy
         {
             return new LaunchAssessment(
                 LaunchReadiness.SteamNotRunning,
-                $"Start Steam and sign in as {selectedAccount.DisplayName}.");
+                $"Start Steam and sign in to Steam login “{selectedAccount.SteamLoginName}”.");
         }
 
         if (activeAccount is null)
         {
             return new LaunchAssessment(
                 LaunchReadiness.ActiveAccountUnknown,
-                "Steam is running, but its active account could not be verified. Finish signing in or restart Steam; the game will stay blocked until verification succeeds.");
+                "Steam is running, but its active account could not be verified. Finish signing in or restart Steam; the launch will stay blocked until verification succeeds.");
         }
 
         if (!string.Equals(
@@ -53,13 +53,13 @@ public static class LaunchPolicy
         {
             return new LaunchAssessment(
                 LaunchReadiness.AccountSwitchRequired,
-                $"Steam is currently using {activeAccount.PersonaName}. Switch Steam to {selectedAccount.DisplayName}; Switchboard will verify it before launching.",
+                $"Steam is currently using login “{activeAccount.AccountName}”. Switch Steam to login “{selectedAccount.SteamLoginName}”; Switchboard will verify it before launching.",
                 activeAccount);
         }
 
         return new LaunchAssessment(
             LaunchReadiness.Ready,
-            $"Ready to play as {selectedAccount.DisplayName}.",
+            $"Steam login “{selectedAccount.SteamLoginName}” verified. Ready to launch.",
             activeAccount);
     }
 }

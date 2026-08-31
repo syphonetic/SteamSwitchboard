@@ -1,7 +1,7 @@
 <Window x:Class="SteamSwitchboard.AccountSwitchWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Choose the play account in Steam"
+        Title="Switch account in Steam"
         Icon="{StaticResource AppIcon}"
         Background="{StaticResource BackgroundBrush}"
         Width="590"
@@ -19,11 +19,11 @@
         </Grid.RowDefinitions>
 
         <StackPanel>
-            <TextBlock Text="One quick check in Steam" Style="{StaticResource HeadingText}" />
+            <TextBlock Text="Steam login required" Style="{StaticResource HeadingText}" />
             <TextBlock Margin="0,8,0,0"
                        Style="{StaticResource MutedText}"
                        TextWrapping="Wrap"
-                       Text="Steam's desktop client supports one account at a time. Switchboard will wait and launch only after the correct account is active." />
+                       Text="Switchboard cannot change Steam's account. After you switch to the required login in Steam, Switchboard verifies it and sends the launch request." />
         </StackPanel>
 
         <ScrollViewer Grid.Row="1"
@@ -53,7 +53,7 @@
                                    Margin="0,7,0,0"
                                    Foreground="{StaticResource AccentBrush}"
                                    TextWrapping="Wrap"
-                                   Text="Automatic launch armed — Cancel stops it." />
+                            Text="Launch request pending — Cancel before verification completes stops it." />
                     </StackPanel>
                 </Border>
                 <TextBlock x:Name="StatusText"
@@ -70,7 +70,7 @@
                            Style="{StaticResource MutedText}"
                            TextAlignment="Center"
                            TextWrapping="Wrap"
-                           Text="Switchboard chat workspaces are separate from Steam's desktop play account. After you switch in Steam, Switchboard verifies the exact active account and starts the game automatically." />
+                            Text="Chat profiles are separate from Steam's one native desktop login. Switch accounts in Steam itself; after an exact match, Switchboard sends the application's official run request to Steam." />
             </StackPanel>
         </Border>
         </ScrollViewer>
@@ -83,7 +83,7 @@
                     Style="{StaticResource SecondaryButton}" />
             <Button x:Name="OpenSteamButton"
                     MinWidth="220"
-                    Content="Open Steam to switch account"
+                    Content="Open Steam"
                     Click="OnOpenSteamClicked"
                     Style="{StaticResource PrimaryButton}" />
         </WrapPanel>

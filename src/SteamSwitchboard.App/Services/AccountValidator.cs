@@ -38,7 +38,7 @@ public static class AccountValidator
 
         if (!IsSafeSteamLoginName(account.SteamLoginName))
         {
-            return "The Steam account name is not valid.";
+            return "The Steam login name is not valid.";
         }
 
         if (!IsAccentHex(account.AccentHex))
@@ -58,7 +58,7 @@ public static class AccountValidator
                     account.SteamLoginName.Trim(),
                     StringComparison.OrdinalIgnoreCase)))
         {
-            return "That Steam account is already in Switchboard.";
+            return "That Steam login is already linked to another Switchboard profile.";
         }
 
         return null;

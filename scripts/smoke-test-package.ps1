@@ -93,7 +93,13 @@ try {
         throw 'The packaged executable was not found.'
     }
 
-    Add-Type -AssemblyName System.Drawing.Common
+    $drawingAssembly = if ($PSVersionTable.PSEdition -eq 'Desktop') {
+        'System.Drawing'
+    }
+    else {
+        'System.Drawing.Common'
+    }
+    Add-Type -AssemblyName $drawingAssembly
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;

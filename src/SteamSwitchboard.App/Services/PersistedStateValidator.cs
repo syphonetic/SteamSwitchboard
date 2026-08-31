@@ -12,6 +12,7 @@ public static class PersistedStateValidator
         state.Accounts ??= [];
         state.Settings ??= new AppSettings();
         state.PendingBrowserProfileDeletionIds ??= [];
+        state.PendingWindowsNotificationAccountCleanupIds ??= [];
         if (state.Accounts.Count > AccountValidator.MaximumAccountProfiles)
         {
             throw new InvalidDataException(
@@ -64,6 +65,44 @@ public static class PersistedStateValidator
         }
 
         state.PendingBrowserProfileDeletionIds = pendingDeletionIds.ToList();
+
+        if (state.PendingWindowsNotificationAccountCleanupIds.Count
+            > AccountValidator.MaximumAccountProfiles)
+        {
+            throw new InvalidDataException(
+                $"The settings contain more than {AccountValidator.MaximumAccountProfiles} Windows notification cleanup requests.");
+        }
+
+        var pendingNotificationCleanupIds = new HashSet<Guid>();
+        foreach (var pendingId in state.PendingWindowsNotificationAccountCleanupIds)
+        {
+            if (pendingId == Guid.Empty
+                || !pendingNotificationCleanupIds.Add(pendingId))
+            {
+                throw new InvalidDataException(
+                    "The settings contain an invalid Windows notification cleanup request.");
+            }
+        }
+
+        state.PendingWindowsNotificationAccountCleanupIds =
+            pendingNotificationCleanupIds.ToList();
+        var hasPendingNotificationCleanup =
+            state.PendingWindowsNotificationHistoryClear
+            || state.PendingWindowsNotificationAccountCleanupIds.Count > 0;
+        if (hasPendingNotificationCleanup
+            && state.PendingWindowsNotificationCleanupRequestId is not Guid requestId)
+        {
+            state.PendingWindowsNotificationCleanupRequestId = Guid.NewGuid();
+        }
+        else if (state.PendingWindowsNotificationCleanupRequestId == Guid.Empty)
+        {
+            throw new InvalidDataException(
+                "The settings contain an invalid Windows notification cleanup generation.");
+        }
+        else if (!hasPendingNotificationCleanup)
+        {
+            state.PendingWindowsNotificationCleanupRequestId = null;
+        }
 
         var configuredPath = state.Settings.SteamExecutablePath;
         if (string.IsNullOrWhiteSpace(configuredPath))

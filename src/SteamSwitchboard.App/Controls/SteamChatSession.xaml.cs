@@ -1155,7 +1155,7 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
     private void UpdateWorkspaceIdentity()
     {
         WorkspaceIdentityText.Text =
-            $"Workspace label: {_account.DisplayName}  •  expected Steam account: {_account.SteamLoginName}";
+            $"Profile nickname: {_account.DisplayName}  •  expected Steam login: {_account.SteamLoginName}";
     }
 
     private bool IsWorkspaceVisible() =>

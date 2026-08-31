@@ -13,6 +13,6 @@ public sealed record InstalledGame(
         >= 1_073_741_824 => $"{SizeOnDisk / 1_073_741_824d:0.#} GB",
         >= 1_048_576 => $"{SizeOnDisk / 1_048_576d:0.#} MB",
         > 0 => $"{SizeOnDisk / 1024d:0.#} KB",
-        _ => "Installed"
+        _ => "Size unavailable"
     };
 }

@@ -4,7 +4,7 @@
   <img src="src/SteamSwitchboard.App/Assets/Branding/SteamSwitchboard-logo-v1.png" alt="SteamSwitchboard switchboard-and-chat logo" width="220" />
 </p>
 
-SteamSwitchboard is a privacy-first Windows companion for people who use several Steam accounts. It gives every saved profile an independent official Steam web-chat session and provides an account-verified launcher for installed games.
+SteamSwitchboard is a privacy-first Windows companion for people who use several Steam accounts. It gives every saved profile an independent official Steam web-chat session and provides an account-verified handoff for local Steam library applications.
 
 ![SteamSwitchboard account workspace](artifacts/ui-final.png)
 
@@ -13,24 +13,24 @@ SteamSwitchboard is a privacy-first Windows companion for people who use several
 ## What it solves
 
 - **Conversations without account churn.** Every Switchboard profile receives a separate Microsoft Edge WebView2 profile, so its Steam web session, cookies, and cache remain isolated from the others. Up to 16 chats stay open concurrently by default; additional saved profiles reopen on selection without losing their persisted Steam sign-in. A memory-saving sleep option remains available in Settings.
-- **Account-aware notifications.** Steam web notifications are surfaced with the receiving Switchboard profile, immutable login name, and Steam-provided notification title (normally the sender shown by Steam). Tagged replacements, native click/close lifecycle, a correlated unread fallback, raw-input bounds, and per-profile/global flood circuit breakers prevent duplicates and unbounded work. Message previews are off by default, Windows alerts have a master switch, notification text is never persisted, and the in-app history is bounded to the current run. A Windows alert click opens the labelled notification center because the legacy balloon API does not identify which alert was clicked; choosing a specific entry there opens the correct account.
-- **Safer account-aware launching.** Switchboard discovers installed Steam libraries and labels every action `Play as <account>`. Before launching, it repeatedly verifies a local Valve-signed `steam.exe`, one stable Steam process identity, and one authoritative active SteamID—including a final check after locking the executable. If anything is unknown, duplicated, or changes, launch stays blocked.
+- **Account-aware notifications.** Steam web notifications show the receiving profile nickname, linked Steam login, and Steam-provided title (normally the sender shown by Steam). On supported systems, a modern Windows alert opens the receiving chat and correlates its click to the matching live in-app notification through bounded opaque identifiers. A bounded tray-alert fallback remains available when the self-contained Windows build cannot use Microsoft's modern notification broker; its clicks open the account-labelled in-app center because legacy callbacks contain no alert identity. Message previews are off by default, Windows alerts have a master switch, and Settings includes a test alert, live delivery status, and a shortcut to Windows notification settings.
+- **Safer account-aware launching.** The **Library** page discovers local Steam application manifests and asks for the **Required Steam account** before offering **Launch with Steam**. A manifest and local directory do not prove that an application is fully installed or immediately playable; Steam remains authoritative. Switchboard does not pretend that a web-chat profile changes Steam's one native desktop login. It repeatedly verifies a local Valve-signed `steam.exe`, one stable Steam process, and Steam's authoritative active SteamID; a mismatch opens a guided wait screen while you switch in Steam itself. Only after an exact match does it send Valve's `steam://run/<AppID>` request.
 - **Capacity beyond Steam's small account cache.** Switchboard supports up to 512 saved profiles on one PC. A safety budget keeps at most 16 WebView2 chats live simultaneously; the least-recently-used hidden workspace closes and transparently reopens when a seventeenth profile is selected. These explicit bounds prevent a damaged state file from exhausting the machine.
-- **Beginner-friendly operation.** Steam and installed games are discovered automatically. Friendly profile labels can be renamed at any time, the play account has its own clear drop-down, and account removal includes a plain-language confirmation and local-session cleanup. Navigation and settings remain available while chat workspaces connect or recover.
+- **Beginner-friendly operation.** Steam and local library entries are discovered automatically. A **profile nickname** is private, local, and editable; the linked **Steam login** is the exact native login used by the launch guard. Settings can safely relink it only to an account detected in Steam's local cache. Account removal includes a plain-language confirmation and local-session cleanup, and the shell remains usable while chats, launch checks, or Windows alerts initialise in the background.
 
 ## Quick start
 
 1. Extract the downloaded `SteamSwitchboard-1.0.0-win-x64.zip`.
 2. Run `SteamSwitchboard.exe`.
-3. Choose **Add account**, enter a friendly label and the account's Steam login name, then sign in on the official Steam page shown inside the app.
+3. Choose **Add account**, enter a private profile nickname and the account's exact Steam login name, then sign in on the official Steam page shown inside the app.
 4. Select any account to use its conversation workspace. Up to 16 open profiles can notify you in the background; additional saved profiles reopen when selected.
-5. Open **Games**, choose the intended account from **Play account**, and select **Play as…** beside a game. If Steam is using another account, Switchboard opens Steam, waits for you to use Steam's own account switcher, verifies the exact active account, and starts the game automatically.
+5. Open **Library**, choose the **Required Steam account**, and select **Launch with Steam** beside a game. If Steam is using another login, Switchboard opens Steam and waits while you switch there. It submits the launch only after an exact match; Steam still decides whether ownership, updates, anti-cheat, or another client condition allows the game to start.
 
-To change a friendly label later, select the account and use **Settings → Rename profile**. The Steam login name used for launch verification is intentionally not changed by renaming the label.
+To change a nickname later, select the account and use **Settings → Edit profile nickname**. If the profile was linked to the wrong native login, use **Relink Steam login** and choose one of the logins Switchboard safely detected from Steam. Relinking does not change the signed-in identity inside the web page.
 
 Steam Guard and QR approval continue to work through Steam's own sign-in page. SteamSwitchboard never asks for or stores a password.
 
-The Switchboard label is a convenience label, not proof of the web identity. A permanent banner shows the expected login name; always confirm the account displayed by Steam's page before sending a message.
+The profile nickname is convenience metadata, not proof of web identity. A permanent banner shows the expected Steam login; always confirm the account displayed by Steam's page before sending a message.
 
 ## The important Steam limitation
 
@@ -39,7 +39,7 @@ Valve supports using several accounts on one computer, but the native Steam desk
 The safe product boundary is:
 
 - up to 16 simultaneous, isolated Steam **web conversation sessions**, with as many as 512 saved profiles; and
-- one native Steam **play account** at a time, with explicit verification and a guided account switch when needed.
+- one native Steam desktop login at a time, with explicit verification and a guided account switch when needed.
 
 This follows [Valve's published account-use rule](https://help.steampowered.com/en/faqs/view/71EA-CDCE-FB5C-82B3). Running games under truly concurrent accounts requires separate operating-system or physical/remote machine environments and is outside this project.
 
@@ -50,13 +50,14 @@ This follows [Valve's published account-use rule](https://help.steampowered.com/
 - Internet access for Steam web chat
 - Microsoft Edge WebView2 Evergreen Runtime; it is present on most current Windows installations and can be obtained from [Microsoft's WebView2 download page](https://developer.microsoft.com/en-us/microsoft-edge/webview2/consumer/)
 
-The packaged build includes the .NET runtime, so a separate .NET installation is not required for end users.
+The packaged build includes the .NET runtime and the Windows App SDK components it uses, so a separate .NET installation is not required for end users. Modern Windows app notifications additionally depend on an operating-system broker that is not present on every self-contained/unpackaged system; Switchboard detects that condition and uses its compatibility tray alert instead.
 
 ## Privacy and security
 
 - Embedded documents are limited to the exact `steamcommunity.com/chat` and `steamcommunity.com/login` routes over default-port HTTPS. Child frames use the same policy.
 - The app exposes no browser host objects or web messaging. Developer tools, script dialogs, context menus, password saving, autofill, downloads, camera, clipboard reads, screen capture, HTTP authentication, client certificates, and custom protocols are blocked. Exact-origin Steam notification permission is handled by the host, while a visible, user-initiated Steam microphone request may use WebView2's own prompt; neither decision is saved.
 - Notification titles and bodies are treated as untrusted input, raw-size checked before sanitisation, stripped of control/bidirectional formatting characters, replacement-aware, globally and per-profile rate-contained, bounded in memory, and never written to state or diagnostics.
+- Modern Windows alerts expire after 24 hours and on reboot. Turning alerts off, disabling previews, clearing history, or forgetting a profile first saves an opaque cleanup request, then removes the relevant Windows alerts through one ordered bounded queue. New modern deliveries wait behind the latest cleanup generation; a successful Windows removal clears only its matching receipt. Shutdown drains accepted work for up to five seconds, and startup retries any receipt left by an interruption or Windows failure. Windows history removal remains best effort outside the app's control. Preview text remains opt-in, and **Send test alert** verifies the path without requiring a real message.
 - User-initiated external HTTPS links show the complete canonical destination before opening in the system browser. Script-initiated external navigation is silently blocked.
 - Profile names on disk are generated GUIDs rather than Steam login names.
 - Steam metadata is read with strict path, size, nesting, and identity limits. Remote, linked, malformed, or overlarge metadata is ignored. The app never modifies Steam configuration.
@@ -79,6 +80,12 @@ On an interactive Windows desktop with WebView2 installed, reproduce the two-acc
 
 ```powershell
 ./scripts/test-ui-regression.ps1
+```
+
+To additionally submit and then clear a real Windows test alert through the same UI path:
+
+```powershell
+dotnet run --project tests/SteamSwitchboard.UiRegression -c Release -- --notification-smoke
 ```
 
 For the extended dependency, secret, configuration, and static-analysis pass:

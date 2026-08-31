@@ -25,9 +25,9 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
-        <Style x:Key="GamesPageStyle" TargetType="Grid" BasedOn="{StaticResource PageStyle}">
+        <Style x:Key="LibraryPageStyle" TargetType="Grid" BasedOn="{StaticResource PageStyle}">
             <Style.Triggers>
-                <DataTrigger Binding="{Binding SelectedSection}" Value="{x:Static viewModels:AppSection.Games}">
+                <DataTrigger Binding="{Binding SelectedSection}" Value="{x:Static viewModels:AppSection.Library}">
                     <Setter Property="Visibility" Value="Visible" />
                 </DataTrigger>
             </Style.Triggers>
@@ -62,7 +62,7 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusStyle}" />
-            <Setter Property="AutomationProperties.Name" Value="{Binding PlayAccountLabel}" />
+            <Setter Property="AutomationProperties.Name" Value="{Binding LaunchIdentityLabel}" />
             <Setter Property="AutomationProperties.HelpText" Value="{Binding StatusText}" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -70,6 +70,8 @@
                         <Border x:Name="ItemBorder"
                                 Padding="10"
                                 Background="{TemplateBinding Background}"
+                                BorderBrush="Transparent"
+                                BorderThickness="3,0,0,0"
                                 CornerRadius="10">
                             <ContentPresenter />
                         </Border>
@@ -79,6 +81,7 @@
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="ItemBorder" Property="Background" Value="#1B3047" />
+                                <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -106,12 +109,12 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Image Width="40"
-                           Height="40"
-                           Source="{StaticResource AppIcon}"
+                    <Image x:Name="HeaderBrandLogo"
+                           Width="48"
+                           Height="48"
                            Stretch="Uniform"
-                           AutomationProperties.Name="SteamSwitchboard logo" />
-                    <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                           RenderOptions.BitmapScalingMode="HighQuality" />
+                    <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
                         <TextBlock FontSize="17" FontWeight="SemiBold" Text="SteamSwitchboard" />
                         <TextBlock Style="{StaticResource MutedText}" FontSize="11" Text="UNOFFICIAL COMPANION" />
                     </StackPanel>
@@ -127,11 +130,11 @@
                             Content="Chats"
                             Click="OnChatsNavClicked"
                             Style="{StaticResource SecondaryButton}" />
-                    <Button x:Name="GamesNavButton"
+                    <Button x:Name="LibraryNavButton"
                             Width="94"
                             Margin="0,0,6,0"
-                            Content="Games"
-                            Click="OnGamesNavClicked"
+                            Content="Library"
+                            Click="OnLibraryNavClicked"
                             Style="{StaticResource QuietButton}" />
                     <Button x:Name="SettingsNavButton"
                             Width="94"
@@ -300,7 +303,7 @@
                             <TextBlock FontSize="15" FontWeight="SemiBold" Text="Your accounts" />
                             <TextBlock Margin="0,3,0,0"
                                        Style="{StaticResource MutedText}"
-                                       Text="No artificial profile limit" />
+                                       Text="Up to 512 saved profiles" />
                         </StackPanel>
                         <Button Grid.Column="1"
                                 Width="42"
@@ -316,9 +319,8 @@
 
                     <Grid Grid.Row="1" Margin="0,16,0,12">
                         <ListBox x:Name="AccountList"
-                                 AutomationProperties.Name="Steam account workspaces"
+                                 AutomationProperties.Name="SteamSwitchboard profiles"
                                  ItemsSource="{Binding Accounts}"
-                                 SelectedItem="{Binding SelectedAccount, Mode=TwoWay}"
                                  SelectionChanged="OnAccountSelectionChanged"
                                  Background="Transparent"
                                  BorderThickness="0"
@@ -351,8 +353,8 @@
                                                      Fill="{StaticResource SuccessBrush}"
                                                      Stroke="#0B1624"
                                                      StrokeThickness="2"
-                                                     ToolTip="Current Steam play account"
-                                                     Visibility="{Binding IsCurrentPlayAccount, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                                     ToolTip="Active in desktop Steam"
+                                                     Visibility="{Binding IsActiveInSteam, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                         </Grid>
 
                                         <StackPanel Grid.Column="1" Margin="10,0,6,0" VerticalAlignment="Center">
@@ -361,7 +363,7 @@
                                                        Style="{StaticResource MutedText}"
                                                        FontSize="11"
                                                        TextTrimming="CharacterEllipsis">
-                                                <Run Text="@" />
+                                                <Run Text="Login: " />
                                                 <Run Text="{Binding SteamLoginName, Mode=OneWay}" />
                                                 <Run Text="  •  " />
                                                 <Run Text="{Binding StatusText, Mode=OneWay}" />
@@ -399,7 +401,7 @@
                             <TextBlock Margin="0,12,0,0" FontWeight="SemiBold" Text="No accounts yet" />
                             <TextBlock Margin="0,6,0,16"
                                        Style="{StaticResource MutedText}"
-                                       Text="Add as many account workspaces as you need." />
+                                       Text="Add a separate profile for each Steam account you use." />
                             <Button Content="Add account"
                                     Click="OnAddAccountClicked"
                                     Style="{StaticResource PrimaryButton}" />
@@ -457,7 +459,7 @@
                         </StackPanel>
 
                         <Border Grid.Column="1"
-                                MaxWidth="310"
+                                Width="360"
                                 Padding="14,9"
                                 Background="{StaticResource SurfaceBrush}"
                                 BorderBrush="{StaticResource BorderBrush}"
@@ -465,24 +467,46 @@
                                 CornerRadius="10"
                                 VerticalAlignment="Center"
                                 Visibility="{Binding HasSelectedAccount, Converter={StaticResource BooleanToVisibilityConverter}}">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Grid x:Name="SelectedProfileIdentityCard"
+                                  ToolTip="The profile nickname is local and editable. The linked Steam login is used for native launch checks.">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="76" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="76" />
+                                </Grid.ColumnDefinitions>
                                 <Ellipse Width="9"
                                          Height="9"
-                                         Margin="0,0,8,0"
-                                         Fill="{Binding SelectedAccount.AccentHex, Converter={StaticResource HexToBrushConverter}}" />
-                                <TextBlock Foreground="{StaticResource MutedTextBrush}" Text="Workspace " />
-                                <TextBlock MaxWidth="150"
-                                           FontWeight="SemiBold"
-                                           Text="{Binding SelectedAccount.DisplayName}"
-                                           TextTrimming="CharacterEllipsis"
-                                           ToolTip="{Binding SelectedAccount.DisplayName}" />
-                                <Button Margin="10,0,0,0"
+                                         HorizontalAlignment="Center"
+                                         VerticalAlignment="Center"
+                                         Fill="{Binding SelectedProfileAccentHex, Mode=OneWay, Converter={StaticResource HexToBrushConverter}}" />
+                                <StackPanel Grid.Column="1"
+                                            MaxWidth="180"
+                                            HorizontalAlignment="Center"
+                                            TextBlock.TextAlignment="Center">
+                                    <TextBlock Foreground="{StaticResource MutedTextBrush}"
+                                               FontSize="11"
+                                               Text="PROFILE NICKNAME" />
+                                    <TextBlock x:Name="SelectedProfileNicknameText"
+                                               FontWeight="SemiBold"
+                                               Text="{Binding SelectedProfileDisplayName, Mode=OneWay}"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding SelectedProfileDisplayName, Mode=OneWay}" />
+                                    <TextBlock Foreground="{StaticResource MutedTextBrush}"
+                                               FontSize="11"
+                                               Text="{Binding SelectedProfileSteamLoginName, Mode=OneWay, StringFormat=Steam login: {0}}"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding SelectedProfileSteamLoginName, Mode=OneWay}" />
+                                </StackPanel>
+                                <Button x:Name="EditProfileNicknameButton"
+                                        Grid.Column="2"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
                                         Padding="7,3"
-                                        Content="Rename"
+                                        Content="Edit"
                                         Click="OnRenameAccountClicked"
-                                        AutomationProperties.Name="Rename selected account label"
+                                        AutomationProperties.Name="Rename selected profile nickname"
                                         Style="{StaticResource QuietButton}" />
-                            </StackPanel>
+                            </Grid>
                         </Border>
                     </Grid>
 
@@ -517,8 +541,9 @@
                     </Grid>
                 </Grid>
 
-                <Grid Style="{StaticResource GamesPageStyle}">
+                <Grid Style="{StaticResource LibraryPageStyle}">
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
@@ -530,10 +555,10 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel>
-                            <TextBlock Style="{StaticResource HeadingText}" Text="Installed games" />
+                            <TextBlock Style="{StaticResource HeadingText}" Text="Steam library" />
                             <TextBlock Margin="0,5,0,0"
                                        Style="{StaticResource MutedText}"
-                                       Text="Switchboard verifies the active Steam account before every launch." />
+                                       Text="Send a launch request only after Steam's native desktop login matches your selection." />
                         </StackPanel>
                         <Button Grid.Column="1"
                                 MinWidth="120"
@@ -549,10 +574,10 @@
                             <TextBlock Margin="0,0,0,5"
                                        Style="{StaticResource MutedText}"
                                        FontSize="11"
-                                       Text="Search installed games" />
-                            <TextBox AutomationProperties.Name="Search installed games"
+                                       Text="Search local Steam library" />
+                            <TextBox AutomationProperties.Name="Search local Steam library"
                                      Text="{Binding GameSearch, UpdateSourceTrigger=PropertyChanged}"
-                                     ToolTip="Search by game name or App ID" />
+                                     ToolTip="Search by name or App ID" />
                         </StackPanel>
                         <StackPanel Width="300"
                                     Margin="0,0,0,10"
@@ -560,12 +585,12 @@
                             <TextBlock Margin="0,0,0,5"
                                        Style="{StaticResource MutedText}"
                                        FontSize="11"
-                                       Text="Play account" />
-                            <ComboBox AutomationProperties.Name="Play account"
+                                       Text="Required Steam account" />
+                            <ComboBox AutomationProperties.Name="Required Steam account"
                                       ItemsSource="{Binding Accounts}"
                                       SelectedItem="{Binding SelectedPlayAccount, Mode=TwoWay}"
-                                      DisplayMemberPath="PlayAccountLabel"
-                                      ToolTip="{Binding SelectedPlayAccount.PlayAccountLabel}"
+                                      DisplayMemberPath="LaunchIdentityLabel"
+                                      ToolTip="{Binding SelectedPlayAccount.LaunchIdentityLabel}"
                                       SelectionChanged="OnPlayAccountSelectionChanged">
                             </ComboBox>
                             <TextBlock Margin="0,5,0,0"
@@ -579,7 +604,20 @@
                         </StackPanel>
                     </WrapPanel>
 
-                    <Grid Grid.Row="2">
+                    <Border Grid.Row="2"
+                            Margin="4,0,4,14"
+                            Padding="14,11"
+                            Background="#102738"
+                            BorderBrush="#24506B"
+                            BorderThickness="1"
+                            CornerRadius="9">
+                        <TextBlock Foreground="{StaticResource AccentBrush}" TextWrapping="Wrap">
+                            <Run FontWeight="SemiBold" Text="Account guard, not a second Steam client. " />
+                            <Run Text="Steam still owns the one native desktop login. Switchboard does not switch accounts or run multiple native clients; it blocks a launch until the selected login is verifiably active." />
+                        </TextBlock>
+                    </Border>
+
+                    <Grid Grid.Row="3">
                         <ListBox ItemsSource="{Binding GamesView}"
                                  Background="Transparent"
                                  BorderThickness="0"
@@ -592,7 +630,7 @@
                                     <Setter Property="Focusable" Value="False" />
                                     <Setter Property="Margin" Value="0,0,0,8" />
                                     <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
-                                    <Setter Property="AutomationProperties.HelpText" Value="Installed Steam game" />
+                                    <Setter Property="AutomationProperties.HelpText" Value="Local Steam library application" />
                                     <Setter Property="Template">
                                         <Setter.Value>
                                             <ControlTemplate TargetType="ListBoxItem">
@@ -645,12 +683,17 @@
                                                     MinWidth="145"
                                                     Tag="{Binding}"
                                                     Click="OnPlayClicked"
-                                                    AutomationProperties.Name="{Binding DataContext.SelectedPlayAccount.PlayAccountLabel, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay, StringFormat=Play as {0}}"
-                                                    IsEnabled="{Binding DataContext.HasSelectedPlayAccount, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    IsEnabled="{Binding DataContext.CanLaunchGames, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     Style="{StaticResource PrimaryButton}">
+                                                <AutomationProperties.Name>
+                                                    <MultiBinding StringFormat="Launch {0} with Steam; requires Steam login {1}">
+                                                        <Binding Path="Name" />
+                                                        <Binding Path="DataContext.SelectedPlayAccount.SteamLoginName"
+                                                                 RelativeSource="{RelativeSource AncestorType=Window}" />
+                                                    </MultiBinding>
+                                                </AutomationProperties.Name>
                                                 <TextBlock MaxWidth="220" TextTrimming="CharacterEllipsis">
-                                                    <Run Text="Play as " />
-                                                    <Run Text="{Binding DataContext.SelectedPlayAccount.PlayAccountLabel, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}" />
+                                                    <Run Text="Launch with Steam" />
                                                 </TextBlock>
                                             </Button>
                                         </Grid>
@@ -668,7 +711,7 @@
                             <TextBlock Margin="0,14,0,0"
                                        FontSize="20"
                                        FontWeight="SemiBold"
-                                       Text="No installed games found" />
+                                       Text="No local Steam applications found" />
                             <TextBlock Margin="0,8,0,18"
                                        Style="{StaticResource MutedText}"
                                        Text="Check the Steam location in Settings, then refresh the library." />
@@ -688,10 +731,10 @@
                                 <TextBlock Margin="0,14,0,0"
                                            FontSize="20"
                                            FontWeight="SemiBold"
-                                           Text="Add an account before launching games" />
+                                           Text="Add an account before launching library items" />
                                 <TextBlock Margin="0,8,0,18"
                                            Style="{StaticResource MutedText}"
-                                           Text="Each game launch needs a named Steam account to verify." />
+                                                Text="Each launch needs a Steam login name for the account guard." />
                                 <Button Width="150"
                                         Content="Add account"
                                         Click="OnAddAccountClicked"
@@ -757,20 +800,23 @@
 
                             <Border Margin="0,0,0,14" Style="{StaticResource CardBorder}">
                                 <StackPanel>
-                                    <TextBlock Style="{StaticResource SubheadingText}" Text="Conversations &amp; notifications" />
+                                    <TextBlock Style="{StaticResource SubheadingText}" Text="Conversations &amp; Windows alerts" />
                                     <TextBlock Margin="0,6,0,12"
                                                Style="{StaticResource MutedText}"
                                                Text="Keep every account reachable and control how much appears in Windows notifications." />
-                                    <CheckBox Content="Keep open account chats connected (up to 16; uses more memory)"
+                                    <CheckBox x:Name="KeepChatsLiveCheckBox"
+                                              Content="Keep open account chats connected (up to 16; uses more memory)"
                                               IsChecked="{Binding KeepAllChatsLive, Mode=TwoWay}"
                                               Checked="OnConversationSettingsChanged"
                                               Unchecked="OnConversationSettingsChanged" />
-                                    <CheckBox Margin="0,6,0,0"
+                                    <CheckBox x:Name="WindowsNotificationsCheckBox"
+                                              Margin="0,6,0,0"
                                               Content="Show Windows chat notifications"
                                               IsChecked="{Binding EnableWindowsNotifications, Mode=TwoWay}"
                                               Checked="OnConversationSettingsChanged"
                                               Unchecked="OnConversationSettingsChanged" />
-                                    <CheckBox Margin="0,6,0,0"
+                                    <CheckBox x:Name="NotificationPreviewsCheckBox"
+                                              Margin="0,6,0,0"
                                               Content="Show message previews in notification history and Windows alerts"
                                               IsChecked="{Binding ShowNotificationPreviews, Mode=TwoWay}"
                                               Checked="OnConversationSettingsChanged"
@@ -778,6 +824,25 @@
                                     <TextBlock Margin="0,8,0,0"
                                                Style="{StaticResource MutedText}"
                                                Text="The receiving account and Steam-provided notification title are always shown in history. History stays in memory and is cleared when Switchboard exits." />
+                                    <WrapPanel Margin="0,12,0,0">
+                                        <Button x:Name="TestWindowsNotificationButton"
+                                                MinWidth="165"
+                                                Margin="0,0,10,8"
+                                                Content="Send test alert"
+                                                Click="OnTestWindowsNotificationClicked"
+                                                Style="{StaticResource SecondaryButton}" />
+                                        <Button MinWidth="210"
+                                                Margin="0,0,0,8"
+                                                Content="Open Windows notification settings"
+                                                Click="OnOpenWindowsNotificationSettingsClicked"
+                                                Style="{StaticResource QuietButton}" />
+                                    </WrapPanel>
+                                    <TextBlock x:Name="WindowsNotificationStatusText"
+                                               Margin="0,2,0,0"
+                                               Foreground="{StaticResource AccentBrush}"
+                                               Text="Checking Windows alert support…"
+                                               TextWrapping="Wrap"
+                                               AutomationProperties.LiveSetting="Polite" />
                                 </StackPanel>
                             </Border>
 
@@ -786,7 +851,7 @@
                                     <TextBlock Style="{StaticResource SubheadingText}" Text="Local privacy" />
                                     <TextBlock Margin="0,6,0,14"
                                                Style="{StaticResource MutedText}"
-                                               Text="Account labels and browser profiles stay on this Windows account. No cloud sync, analytics, or telemetry is included." />
+                                               Text="Profile nicknames and browser profiles stay on this Windows account. No cloud sync, analytics, or telemetry is included." />
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
@@ -818,7 +883,7 @@
                                     <TextBlock Foreground="{StaticResource WarningBrush}"
                                                FontSize="17"
                                                FontWeight="SemiBold"
-                                               Text="Why play-account verification is required" />
+                                               Text="Why required-account verification is needed" />
                                     <TextBlock Margin="0,8,0,0"
                                                Foreground="#E9D9B3"
                                                Text="Valve officially supports one desktop-client account at a time. Switchboard never patches Steam, copies login tokens, automates its UI, or bypasses anti-cheat. If the requested account is not active, Steam's own account chooser remains in control." />
@@ -832,16 +897,29 @@
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel>
-                                        <TextBlock Style="{StaticResource SubheadingText}" Text="Selected account" />
+                                        <TextBlock Style="{StaticResource SubheadingText}" Text="Selected profile identity" />
                                         <TextBlock Margin="0,6,0,0"
                                                    Style="{StaticResource MutedText}"
-                                                   Text="Forgetting an account clears its local Steam web session from this PC." />
+                                                   TextWrapping="Wrap">
+                                            <Run Text="Nickname: " />
+                                            <Run FontWeight="SemiBold" Text="{Binding SelectedProfileDisplayName, Mode=OneWay}" />
+                                            <Run Text="  ·  Steam login: " />
+                                            <Run FontWeight="SemiBold" Text="{Binding SelectedProfileSteamLoginName, Mode=OneWay}" />
+                                            <LineBreak />
+                                            <Run Text="The nickname is private and editable. The linked Steam login is used only for account-aware launch checks and can be safely relinked to a login detected from Steam. Forgetting clears this profile's local web session." />
+                                        </TextBlock>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                                         <Button MinWidth="140"
                                                 Margin="0,0,10,0"
-                                                Content="Rename profile…"
+                                                Content="Rename nickname…"
                                                 Click="OnRenameAccountClicked"
+                                                IsEnabled="{Binding HasSelectedAccount}"
+                                                Style="{StaticResource SecondaryButton}" />
+                                        <Button MinWidth="165"
+                                                Margin="0,0,10,0"
+                                                Content="Relink Steam login…"
+                                                Click="OnRelinkSteamLoginClicked"
                                                 IsEnabled="{Binding HasSelectedAccount}"
                                                 Style="{StaticResource SecondaryButton}" />
                                         <Button MinWidth="150"
@@ -859,12 +937,11 @@
                                         <ColumnDefinition Width="124" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <Image Width="104"
+                                    <Image x:Name="AboutBrandLogo"
+                                           Width="104"
                                            Height="104"
                                            HorizontalAlignment="Left"
-                                           Source="Assets/Branding/SteamSwitchboard-app-logo.png"
-                                           Stretch="Uniform"
-                                           AutomationProperties.Name="SteamSwitchboard brand mark" />
+                                           Stretch="Uniform" />
                                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                         <TextBlock Style="{StaticResource SubheadingText}" Text="SteamSwitchboard" />
                                         <TextBlock Margin="0,5,0,0"
@@ -874,7 +951,7 @@
                                         <TextBlock Margin="0,8,0,0"
                                                    Style="{StaticResource MutedText}"
                                                    TextWrapping="Wrap"
-                                                   Text="A local-first account workspace for Steam conversations and verified game launches." />
+                                                   Text="A local-first account workspace for Steam conversations, account-labelled alerts, and guarded Steam launches." />
                                     </StackPanel>
                                 </Grid>
                             </Border>

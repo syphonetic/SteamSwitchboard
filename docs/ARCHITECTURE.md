@@ -15,8 +15,9 @@ WPF shell (single instance, standard integrity)
 │  └─ notification router
 │     ├─ exact-origin Web Notification metadata
 │     ├─ unread-title fallback
-│     └─ bounded in-memory account/title history + Windows notification
-├─ Games workspace
+│     ├─ bounded in-memory account/title history
+│     └─ modern Windows app alert → bounded tray fallback
+├─ Library workspace
 │  ├─ SteamInstallationService
 │  │  └─ local path + reparse + Authenticode/Valve verification
 │  ├─ SteamLibraryService
@@ -27,7 +28,7 @@ WPF shell (single instance, standard integrity)
 │     │  ├─ HKCU ActiveProcess\ActiveUser (authoritative)
 │     │  └─ bounded loginusers.vdf (ID-to-login metadata only)
 │     ├─ repeated stable SteamID/process/executable checks
-│     └─ locked steam.exe → -applaunch <AppId>
+│     └─ locked steam.exe → steam://run/<AppId>
 └─ Local state
    ├─ state.json atomic replacement
    ├─ durable browser-profile deletion tombstones
@@ -39,9 +40,9 @@ WPF shell (single instance, standard integrity)
 
 All controls share one WebView2 user-data root to reuse the runtime, but every account receives a unique `ProfileName` derived only from its GUID. WebView2 isolates cookies, cache, site storage, permissions, and preferences per profile. Durable deletion tombstones are processed before any normal workspace; among non-deleting profiles, the selected workspace is created first and background profiles are then warmed serially up to a 16-session live budget. Selecting a profile beyond that budget disposes the least-recently-used hidden controller and reopens the requested profile from its isolated persistent data. Up to 512 profiles can be saved. Users can explicitly enable background sleep to reduce memory use; that setting trades immediate notifications for lower resource use.
 
-Startup restores and settles WPF bindings before account-selection events are enabled, then renders an enabled shell before game discovery or any WebView2 controller is created. Game discovery continues independently. The selected session remains layout-connected while its browser surface stays hidden behind a WPF-owned loading/error panel; background sessions use WPF `Hidden`, not `Collapsed`, so their controllers can initialise at a stable size without painting. Profiles warm one at a time with dispatcher yields, and browser creation plus permission reset share a 15-second startup budget. A failed initialization or browser process is replaced with a fresh session when the user chooses Reconnect. Browser delay or failure therefore affects only that workspace, never navigation, settings, account management, or window input. Native window bounds are recalculated from the current monitor's physical work area and per-monitor DPI at source creation, load, and DPI changes.
+Startup restores flat selected-profile presentation fields before account-selection events are enabled, then renders an enabled shell before game discovery or any WebView2 controller is created. Sidebar selection is synchronized explicitly rather than through a re-entrant two-way WPF selection binding. Game discovery continues independently. The selected session remains layout-connected while its browser surface stays hidden behind a WPF-owned loading/error panel; background sessions use WPF `Hidden`, not `Collapsed`, so their controllers can initialise at a stable size without painting. Profiles warm one at a time with dispatcher yields, and browser creation plus permission reset share a 15-second startup budget. A failed initialization or browser process is replaced with a fresh session when the user chooses Reconnect. Browser delay or failure therefore affects only that workspace, never navigation, settings, account management, or window input. Native window bounds are recalculated from the current monitor's physical work area and per-monitor DPI at source creation, load, and DPI changes.
 
-The host never injects script, reads cookies, registers a host object, or enables web messaging. It observes navigation status, WebView2's native non-persistent notification event, and a numeric unread prefix in the document title only. Notification title/body strings remain untrusted: exact-origin policy, constant-time raw-length rejection before sanitisation, Unicode control/bidirectional removal, fixed display limits, tagged replacement, deferred native click/close reporting, correlated unread fallback, bounded history, per-profile/global circuit breakers, and non-persistence apply before display. The title normally contains the sender shown by Steam, but Switchboard does not claim that web-controlled string is cryptographically verified identity. Legacy Windows balloon callbacks carry no immutable notification identifier, so they can open only the generic labelled notification center; account navigation occurs only from a specific in-app entry.
+The host never injects script, reads cookies, registers a host object, or enables web messaging. It observes navigation status, WebView2's native non-persistent notification event, and a numeric unread prefix in the document title only. Notification title/body strings remain untrusted: exact-origin policy, constant-time raw-length rejection before sanitisation, Unicode control/bidirectional removal, fixed display limits, tagged replacement, deferred native click/close reporting, correlated unread fallback, bounded history, per-profile/global circuit breakers, and non-persistence by Switchboard apply before display. Modern Windows alerts separate profile/login identity, Steam title, and optional preview; use opaque bounded tags/groups; expire after 24 hours and on reboot; and accept only a bounded activation action plus optional exact profile and live-notification GUIDs. A click lifecycle is reported only when both IDs still match one in-memory entry. Sticky service enablement plus a bounded single-reader command queue preserve causal order across delivery, disable, preview redaction, clear, forget, and test operations. Each privacy action first persists a bounded global or detached-profile cleanup marker with a fresh opaque generation. A shared generation barrier coalesces equal work, forces new modern delivery behind every newer generation, and allows only the matching successful operation to clear its receipt. The close path flushes state, submits a final non-cancelled retry, and drains accepted commands for up to five seconds; startup replays anything still unconfirmed. Together these prevent a stale submission from restoring alerts or silently surviving interrupted cleanup; Windows history removal itself remains best effort. The app-local Windows App SDK loads on a worker thread only when alerts are enabled or history cleanup is requested; unsupported/missing Singleton broker state fails into an exception-contained tray path without blocking WPF. Legacy balloon callbacks carry no immutable notification identifier, so they can open only the generic labelled notification center.
 
 ### Document policy
 
@@ -57,12 +58,12 @@ Permissions are deny-by-default and never saved. Notification permission is allo
 
 ### Identity semantics
 
-The user-entered profile label and login name select local workspace and native-launch intent. They do not cryptographically identify the web account. A host-owned area above the WebView permanently shows the expected login and states that Steam's page is authoritative. The connection status says `Steam Chat workspace open`; it reports a loaded workspace rather than claiming chat-service connectivity or verified web identity. Friendly labels can be renamed transactionally, but the Steam login name remains stable for launch verification.
+The user-entered **profile nickname** selects a local workspace and is editable private metadata. The linked **Steam login name** is the exact native-login identifier used by the launch guard. Neither cryptographically identifies the account signed into the web page. A host-owned area above the WebView permanently shows both and states that Steam's page is authoritative. The connection status reports a loaded workspace rather than claiming verified identity. A login can be relinked transactionally only to a unique safe login read from the local Steam account cache; relinking never manipulates Steam authentication or the web profile.
 
 ## Native launch state machine
 
 ```text
-Select account + installed AppID
+Select required Steam login + local library AppID
           │
           ▼
 Resolve absolute local steam.exe
@@ -93,10 +94,13 @@ Wait, then recheck process identity, game, SteamID, and ActiveUser while locked
           ├─ any change ──► block
           │
           ▼
-ProcessStartInfo.ArgumentList: -applaunch <uint AppId>
+Cancellation check immediately before native invocation
+          │
+          ▼
+ProcessStartInfo.ArgumentList: steam://run/<uint AppId>
 ```
 
-`MostRecent` remains useful for ordering cached metadata but is never a launch authority. The registry value is deliberately treated as unknown when absent rather than falling back to stale state. Duplicate case-insensitive login names in `loginusers.vdf` invalidate the complete account mapping. Every successful evaluation must return the same SteamID and exact process identity as the prior evaluation.
+`MostRecent` remains useful for ordering cached metadata but is never a launch authority. The registry value is deliberately treated as unknown when absent rather than falling back to stale state. Duplicate case-insensitive login names in `loginusers.vdf` invalidate the complete account mapping. Every successful evaluation must return the same SteamID and exact process identity as the prior evaluation. Signature/process/account checks execute off the WPF thread and are serialized, so a slow trust check cannot freeze the interface or race a second launch. Cancellation is checked throughout verification and immediately before process creation. A successful result means only that the verified request was handed to Steam; Steam still controls install readiness, ownership, updates, anti-cheat, and actual process startup.
 
 ## Untrusted local metadata
 
@@ -108,7 +112,7 @@ Directory enumeration and parsing occur inside exception boundaries. Results are
 
 ## Persistence and deletion protocol
 
-`StateStore` accepts at most 4 MiB, JSON depth 32, 100,000 JSON elements, and 512 account profiles. Case-insensitive duplicate properties and unknown properties are rejected. Before use, a linear pass normalises and validates every account ID/login/name/colour, identity uniqueness, selected-chat ID, selected-play ID, configured path, and deletion tombstone. Invalid state is quarantined to at most three collision-resistant recovery files. Notification content is never part of persisted state.
+`StateStore` accepts at most 4 MiB, JSON depth 32, 100,000 JSON elements, 512 account profiles, and 512 detached Windows-cleanup account IDs. Case-insensitive duplicate properties and unknown properties are rejected. Before use, a linear pass normalises and validates every account ID/login/name/colour, identity uniqueness, selected-chat ID, selected-play ID, configured path, deletion tombstone, and opaque cleanup generation. Invalid state is quarantined to at most three collision-resistant recovery files. Notification content is never part of persisted state.
 
 Writes serialise to a unique same-directory file with write-through semantics, flush, size-check, and replace the primary. Add/remove operations roll UI and model state back if persistence fails. A per-session named mutex prevents two GUI instances from overwriting each other's snapshots.
 

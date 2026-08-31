@@ -22,7 +22,7 @@ public sealed class GameLaunchServiceTests
         Assert.IsNotNull(fixture.StartInfo);
         Assert.AreEqual(fixture.SteamExecutable, fixture.StartInfo.FileName);
         CollectionAssert.AreEqual(
-            new[] { "-applaunch", "10" },
+            new[] { "steam://run/10" },
             fixture.StartInfo.ArgumentList.ToArray());
     }
 
@@ -123,6 +123,58 @@ public sealed class GameLaunchServiceTests
         Assert.AreEqual(0, fixture.StartCount);
     }
 
+    [TestMethod]
+    public void LaunchIfReady_CancellationBeforeFinalCheckNeverStartsSteam()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var delayCount = 0;
+        using var fixture = new LaunchFixture(
+            42,
+            42,
+            verificationDelay: _ =>
+            {
+                delayCount++;
+                if (delayCount == 2)
+                {
+                    cancellation.Cancel();
+                }
+            });
+
+        _ = Assert.ThrowsExactly<OperationCanceledException>(() =>
+            fixture.Launcher.LaunchIfReady(
+                fixture.Account,
+                fixture.Game,
+                fixture.SteamExecutable,
+                cancellation.Token));
+
+        Assert.AreEqual(0, fixture.StartCount);
+    }
+
+    [TestMethod]
+    public void LaunchIfReady_CancellationDuringFinalAssessmentNeverStartsSteam()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var fixture = new LaunchFixture(
+            42,
+            42,
+            processIdentityObserved: invocation =>
+            {
+                if (invocation == 3)
+                {
+                    cancellation.Cancel();
+                }
+            });
+
+        _ = Assert.ThrowsExactly<OperationCanceledException>(() =>
+            fixture.Launcher.LaunchIfReady(
+                fixture.Account,
+                fixture.Game,
+                fixture.SteamExecutable,
+                cancellation.Token));
+
+        Assert.AreEqual(0, fixture.StartCount);
+    }
+
     private sealed class LaunchFixture : IDisposable
     {
         private readonly TemporaryDirectory _temporary = new();
@@ -134,7 +186,9 @@ public sealed class GameLaunchServiceTests
             bool executableIsTrusted = true,
             IEnumerable<bool>? trustDecisions = null,
             IEnumerable<uint?>? activeAccountIds = null,
-            IEnumerable<SteamProcessIdentity?>? processIdentities = null)
+            IEnumerable<SteamProcessIdentity?>? processIdentities = null,
+            Action<TimeSpan>? verificationDelay = null,
+            Action<int>? processIdentityObserved = null)
         {
             _activeAccountIds = new Queue<uint?>(
                 activeAccountIds ?? [firstAccountId, secondAccountId]);
@@ -179,6 +233,7 @@ public sealed class GameLaunchServiceTests
             var processIdentityQueue = processIdentities is null
                 ? null
                 : new Queue<SteamProcessIdentity?>(processIdentities);
+            var processIdentityInvocation = 0;
             Launcher = new GameLaunchService(
                 installation,
                 accountService,
@@ -188,12 +243,19 @@ public sealed class GameLaunchServiceTests
                     StartCount++;
                     StartInfo = startInfo;
                 },
-                processIdentityQueue is null
+                processIdentityQueue is null && processIdentityObserved is null
                     ? null
-                    : _ => processIdentityQueue.Count > 1
-                        ? processIdentityQueue.Dequeue()
-                        : processIdentityQueue.Peek(),
-                _ => { });
+                    : _ =>
+                    {
+                        processIdentityInvocation++;
+                        processIdentityObserved?.Invoke(processIdentityInvocation);
+                        return processIdentityQueue is null
+                            ? new SteamProcessIdentity(-1, 0)
+                            : processIdentityQueue.Count > 1
+                                ? processIdentityQueue.Dequeue()
+                                : processIdentityQueue.Peek();
+                    },
+                verificationDelay ?? (_ => { }));
         }
 
         public string SteamExecutable { get; }

@@ -24,7 +24,7 @@
                 <TextBlock Margin="0,3,0,0"
                            FontSize="11"
                            Foreground="{StaticResource MutedTextBrush}"
-                           Text="This local label is not identity verification. Confirm Steam's signed-in account before sending a message." />
+                           Text="This profile nickname is not identity verification. Confirm Steam's signed-in account before sending a message." />
             </StackPanel>
         </Border>
 

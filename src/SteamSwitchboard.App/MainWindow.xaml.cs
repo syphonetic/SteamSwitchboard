@@ -16,6 +16,7 @@ public partial class MainWindow : Window
 {
     private const int MaximumQueuedWindowsNotifications = 20;
     private const int MaximumSimultaneousChatSessions = 16;
+    private const string SettingsTestReplacementTag = "settings-test";
 
     private readonly MainViewModel _viewModel;
     private readonly AppPaths _paths;
@@ -27,12 +28,21 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _playAccountTimer;
     private readonly DispatcherTimer _balloonReleaseTimer;
     private readonly System.Windows.Forms.NotifyIcon _notificationIcon;
+    private readonly WindowsAppNotificationService _appNotifications;
     private readonly Queue<WindowsNotificationDelivery> _pendingBalloonNotifications = [];
+    private readonly OrderedCommandQueue<WindowsAppNotificationService> _windowsNotificationCommands;
+    private readonly NotificationPrivacyGate _notificationPrivacyGate = new();
     private System.Drawing.Icon? _notificationTrayIcon;
     private WindowsNotificationDelivery? _activeBalloonNotification;
+    private readonly NotificationCleanupGenerationBarrier
+        _notificationCleanupBarrier = new();
     private bool _startupStarted;
     private bool _isLoaded;
     private bool _suppressSelectionEvents;
+    private bool _legacyNotificationIconVisible;
+    private bool _shutdownStarted;
+    private bool _shutdownComplete;
+    private int _notificationSettingsRevision;
 
     internal event Action<AccountViewModel>? ChatSessionInitializationStarted;
 
@@ -51,6 +61,7 @@ public partial class MainWindow : Window
         Func<AccountViewModel, string, SteamChatSession>? chatSessionFactory)
     {
         InitializeComponent();
+        LoadBrandingImages();
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         _launcher = launcher ?? throw new ArgumentNullException(nameof(launcher));
@@ -67,6 +78,10 @@ public partial class MainWindow : Window
             Text = "SteamSwitchboard"
         };
         InitializeNotificationIcon();
+        _appNotifications = new WindowsAppNotificationService();
+        _appNotifications.Activated += OnWindowsAppNotificationActivated;
+        _windowsNotificationCommands = new OrderedCommandQueue<WindowsAppNotificationService>(
+            _appNotifications);
 
         _balloonReleaseTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -79,6 +94,47 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromSeconds(5)
         };
         _playAccountTimer.Tick += (_, _) => UpdateCurrentPlayAccount();
+        NavigateTo(_viewModel.SelectedSection);
+    }
+
+    private void LoadBrandingImages()
+    {
+        var logoPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Assets",
+            "Branding",
+            "SteamSwitchboard-app-logo.png");
+        if (!File.Exists(logoPath))
+        {
+            return;
+        }
+
+        try
+        {
+            using var stream = new FileStream(
+                logoPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 4096,
+                FileOptions.SequentialScan);
+            var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            bitmap.StreamSource = stream;
+            bitmap.EndInit();
+            bitmap.Freeze();
+            HeaderBrandLogo.Source = bitmap;
+            AboutBrandLogo.Source = bitmap;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or NotSupportedException
+                or FileFormatException)
+        {
+            // Text branding remains usable if a portable install is incomplete.
+        }
     }
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
@@ -89,6 +145,7 @@ public partial class MainWindow : Window
         }
 
         _startupStarted = true;
+        var notificationStartup = Task.CompletedTask;
         _suppressSelectionEvents = true;
         try
         {
@@ -97,7 +154,7 @@ public partial class MainWindow : Window
             await Dispatcher.Yield(DispatcherPriority.ContextIdle);
             _viewModel.SelectedAccount = restoredAccount;
             AccountList.SelectedItem = restoredAccount;
-            ApplyNotificationSettings();
+            notificationStartup = InitializeWindowsNotificationStateAsync();
         }
         catch (OperationCanceledException)
         {
@@ -131,6 +188,7 @@ public partial class MainWindow : Window
         var gameRefreshTask = RefreshGamesAfterStartupAsync();
         try
         {
+            await notificationStartup;
             await ResumePendingProfileDeletionsAsync();
             await InitializeChatSessionsAsync();
         }
@@ -167,7 +225,7 @@ public partial class MainWindow : Window
                 or InvalidDataException)
         {
             _viewModel.StatusMessage =
-                "Steam games could not be refreshed. Chats and settings are still available.";
+                "The local Steam library could not be refreshed. Chats and settings are still available.";
         }
     }
 
@@ -382,6 +440,7 @@ public partial class MainWindow : Window
             try
             {
                 await _viewModel.RemoveAccountAsync(account, _lifetimeToken);
+                AccountList.SelectedItem = _viewModel.SelectedAccount;
             }
             finally
             {
@@ -444,12 +503,14 @@ public partial class MainWindow : Window
         try
         {
             var account = await _viewModel.AddAccountAsync(dialog.Result, _lifetimeToken);
+            AccountList.SelectedItem = account;
             NavigateTo(AppSection.Chats);
             await EnsureChatSessionAsync(account);
             ShowSelectedChat();
         }
         catch (Exception exception) when (
             exception is ArgumentException
+                or InvalidOperationException
                 or IOException
                 or UnauthorizedAccessException)
         {
@@ -489,6 +550,7 @@ public partial class MainWindow : Window
         }
         catch (Exception exception) when (
             exception is ArgumentException
+                or InvalidOperationException
                 or IOException
                 or UnauthorizedAccessException)
         {
@@ -500,12 +562,75 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnRelinkSteamLoginClicked(object sender, RoutedEventArgs e)
+    {
+        if (!EnsureStartupComplete()
+            || _viewModel.SelectedAccount is not { } account)
+        {
+            return;
+        }
+
+        var steamRoot = Path.GetDirectoryName(_viewModel.SteamExecutablePath);
+        var detectedAccounts = string.IsNullOrWhiteSpace(steamRoot)
+            ? []
+            : new SteamClientAccountService().LoadAccounts(steamRoot);
+        if (detectedAccounts.Count == 0)
+        {
+            MessageBox.Show(
+                "No local Steam logins could be detected. Start Steam, finish signing in, then try again.",
+                "Steam login not detected",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        var dialog = new RelinkSteamAccountWindow(
+            account.Profile,
+            detectedAccounts)
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() != true
+            || string.IsNullOrWhiteSpace(dialog.ResultLoginName))
+        {
+            return;
+        }
+
+        try
+        {
+            await _viewModel.RelinkSteamLoginAsync(
+                account,
+                dialog.ResultLoginName,
+                _lifetimeToken);
+            UpdateCurrentPlayAccount();
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException)
+        {
+            MessageBox.Show(
+                exception.Message,
+                "Steam login could not be relinked",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
     private async void OnAccountSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_isLoaded || _suppressSelectionEvents)
         {
             return;
         }
+
+        if (sender is not ListBox { SelectedItem: AccountViewModel selectedAccount })
+        {
+            return;
+        }
+
+        _viewModel.SelectedAccount = selectedAccount;
 
         ShowSelectedChat();
         if (_viewModel.SelectedAccount is { } account)
@@ -526,7 +651,10 @@ public partial class MainWindow : Window
             await _viewModel.SaveAsync(_lifetimeToken);
         }
         catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or OperationCanceledException)
+            exception is IOException
+                or UnauthorizedAccessException
+                or InvalidOperationException
+                or OperationCanceledException)
         {
             if (exception is not OperationCanceledException)
             {
@@ -537,7 +665,7 @@ public partial class MainWindow : Window
 
     private void OnChatsNavClicked(object sender, RoutedEventArgs e) => NavigateTo(AppSection.Chats);
 
-    private void OnGamesNavClicked(object sender, RoutedEventArgs e) => NavigateTo(AppSection.Games);
+    private void OnLibraryNavClicked(object sender, RoutedEventArgs e) => NavigateTo(AppSection.Library);
 
     private void OnSettingsNavClicked(object sender, RoutedEventArgs e) => NavigateTo(AppSection.Settings);
 
@@ -545,7 +673,7 @@ public partial class MainWindow : Window
     {
         _viewModel.SelectedSection = section;
         SetNavStyle(ChatsNavButton, section == AppSection.Chats);
-        SetNavStyle(GamesNavButton, section == AppSection.Games);
+        SetNavStyle(LibraryNavButton, section == AppSection.Library);
         SetNavStyle(SettingsNavButton, section == AppSection.Settings);
         if (section == AppSection.Chats)
         {
@@ -574,6 +702,9 @@ public partial class MainWindow : Window
     private void SetNavStyle(Button button, bool isSelected)
     {
         button.Style = (Style)FindResource(isSelected ? "SecondaryButton" : "QuietButton");
+        System.Windows.Automation.AutomationProperties.SetItemStatus(
+            button,
+            isSelected ? "Current page" : string.Empty);
     }
 
     private async void OnRefreshGamesClicked(object sender, RoutedEventArgs e)
@@ -588,7 +719,7 @@ public partial class MainWindow : Window
         try
         {
             await _viewModel.RefreshGamesAsync(_lifetimeToken);
-            _viewModel.StatusMessage = $"Found {_viewModel.Games.Count} installed games";
+            _viewModel.StatusMessage = $"Found {_viewModel.Games.Count} local Steam library items";
         }
         catch (OperationCanceledException)
         {
@@ -614,17 +745,19 @@ public partial class MainWindow : Window
             await _viewModel.SaveAsync(_lifetimeToken);
             if (_viewModel.SelectedPlayAccount is { } account)
             {
-                _viewModel.StatusMessage = $"Games will launch with {account.DisplayName} selected";
+                _viewModel.StatusMessage =
+                    $"Steam launches now require login {account.SteamLoginName}";
             }
         }
         catch (Exception exception) when (
             exception is IOException
                 or UnauthorizedAccessException
+                or InvalidOperationException
                 or OperationCanceledException)
         {
             if (exception is not OperationCanceledException)
             {
-                _viewModel.StatusMessage = "The play-account choice could not be saved.";
+                _viewModel.StatusMessage = "The required Steam account choice could not be saved.";
             }
         }
     }
@@ -638,32 +771,73 @@ public partial class MainWindow : Window
 
         try
         {
-            await _viewModel.SaveAsync(_lifetimeToken);
-            ApplyNotificationSettings();
-            if (_viewModel.KeepAllChatsLive)
+            var chatLivenessChanged = ReferenceEquals(
+                sender,
+                KeepChatsLiveCheckBox);
+            var notificationSettingChanged = ReferenceEquals(
+                    sender,
+                    WindowsNotificationsCheckBox)
+                || ReferenceEquals(sender, NotificationPreviewsCheckBox);
+            var previewsWereDisabled = ReferenceEquals(
+                    sender,
+                    NotificationPreviewsCheckBox)
+                && NotificationPreviewsCheckBox.IsChecked != true;
+            var notificationsWereDisabled = ReferenceEquals(
+                    sender,
+                    WindowsNotificationsCheckBox)
+                && WindowsNotificationsCheckBox.IsChecked != true;
+            int? notificationSettingsRevision = null;
+            if (notificationSettingChanged)
             {
-                await InitializeChatSessionsAsync();
+                notificationSettingsRevision = Interlocked.Increment(
+                    ref _notificationSettingsRevision);
+                if (previewsWereDisabled || notificationsWereDisabled)
+                {
+                    RevokeNotificationPrivacy();
+                    _ = _viewModel.MarkWindowsNotificationCleanupPending(
+                        accountId: null);
+                }
+                else
+                {
+                    _ = _viewModel.RenewWindowsNotificationCleanupRequest();
+                }
             }
-            else
+
+            await _viewModel.SaveAsync(_lifetimeToken);
+            if (notificationSettingsRevision is int revision
+                && revision == Volatile.Read(ref _notificationSettingsRevision))
             {
-                ShowSelectedChat();
-                _viewModel.StatusMessage =
-                    "Background chats will sleep until selected";
+                await ApplyNotificationSettingsAsync(revision);
+            }
+
+            if (chatLivenessChanged)
+            {
+                if (_viewModel.KeepAllChatsLive)
+                {
+                    await InitializeChatSessionsAsync();
+                }
+                else
+                {
+                    ShowSelectedChat();
+                    _viewModel.StatusMessage =
+                        "Background chats will sleep until selected";
+                }
             }
         }
         catch (Exception exception) when (
             exception is IOException
                 or UnauthorizedAccessException
+                or InvalidOperationException
                 or OperationCanceledException)
         {
-            if (exception is not OperationCanceledException)
+            if (!_lifetime.IsCancellationRequested)
             {
                 _viewModel.StatusMessage = "Conversation settings could not be saved.";
             }
         }
     }
 
-    private void OnPlayClicked(object sender, RoutedEventArgs e)
+    private async void OnPlayClicked(object sender, RoutedEventArgs e)
     {
         if (!EnsureStartupComplete()
             || sender is not Button { Tag: InstalledGame game }
@@ -672,30 +846,67 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (!_viewModel.TryBeginLaunchCheck())
+        {
+            _viewModel.StatusMessage =
+                "A Steam launch check is already running.";
+            return;
+        }
+
+        _viewModel.StatusMessage =
+            $"Checking Steam login before launching {game.Name}…";
+        var launchAccount = new AccountProfile
+        {
+            Id = account.Id,
+            DisplayName = account.DisplayName,
+            SteamLoginName = account.SteamLoginName,
+            AccentHex = account.AccentHex,
+            CreatedUtc = account.Profile.CreatedUtc,
+            LastUsedUtc = account.Profile.LastUsedUtc
+        };
+        var configuredSteamPath = _viewModel.SteamExecutablePath;
         LaunchAssessment assessment;
         try
         {
-            assessment = _launcher.LaunchIfReady(
-                account.Profile,
-                game,
-                _viewModel.SteamExecutablePath);
+            assessment = await Task.Run(
+                () => _launcher.LaunchIfReady(
+                    launchAccount,
+                    game,
+                    configuredSteamPath,
+                    _lifetimeToken),
+                _lifetimeToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
         }
         catch (Exception exception) when (
             exception is InvalidOperationException
                 or Win32Exception
-                or FileNotFoundException)
+                or IOException
+                or UnauthorizedAccessException
+                or System.Security.SecurityException)
         {
             MessageBox.Show(
                 exception.Message,
-                "Game could not be started",
+                "Library item could not be started",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
+            return;
+        }
+        finally
+        {
+            _viewModel.EndLaunchCheck();
+        }
+
+        if (_lifetime.IsCancellationRequested)
+        {
             return;
         }
 
         if (assessment.CanLaunch)
         {
-            _viewModel.StatusMessage = $"Starting {game.Name} as {account.DisplayName}";
+            _viewModel.StatusMessage = $"Launch request sent to Steam for {game.Name}";
             return;
         }
 
@@ -704,9 +915,9 @@ public partial class MainWindow : Window
             or LaunchReadiness.AccountSwitchRequired)
         {
             var switchWindow = new AccountSwitchWindow(
-                account.Profile,
+                launchAccount,
                 game,
-                _viewModel.SteamExecutablePath,
+                configuredSteamPath,
                 _launcher)
             {
                 Owner = this
@@ -717,7 +928,7 @@ public partial class MainWindow : Window
 
         MessageBox.Show(
             assessment.Message,
-            "Cannot start this game yet",
+            "Cannot start this library item yet",
             MessageBoxButton.OK,
             MessageBoxImage.Information);
     }
@@ -762,7 +973,9 @@ public partial class MainWindow : Window
             _viewModel.StatusMessage = "Steam location updated";
         }
         catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
+            exception is IOException
+                or UnauthorizedAccessException
+                or InvalidOperationException)
         {
             MessageBox.Show(
                 exception.Message,
@@ -818,11 +1031,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        RevokeNotificationPrivacy();
         try
         {
             await _viewModel.MarkAccountDeletionPendingAsync(account, _lifetimeToken);
             _viewModel.ClearNotifications(account.Id);
-            PurgeWindowsNotifications(account.Id);
+            await PurgeWindowsNotificationsAsync(account.Id);
             await CompletePendingProfileDeletionAsync(account);
             ShowSelectedChat();
         }
@@ -830,13 +1044,17 @@ public partial class MainWindow : Window
             exception is IOException
                 or UnauthorizedAccessException
                 or InvalidOperationException
-                or COMException)
+                or COMException
+                or OperationCanceledException)
         {
-            MessageBox.Show(
-                exception.Message,
-                "Account could not be forgotten",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
+            if (!_lifetime.IsCancellationRequested)
+            {
+                MessageBox.Show(
+                    exception.Message,
+                    "Account could not be forgotten",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         }
     }
 
@@ -852,7 +1070,7 @@ public partial class MainWindow : Window
 
         foreach (var account in _viewModel.Accounts)
         {
-            account.IsCurrentPlayAccount = false;
+            account.IsActiveInSteam = false;
         }
 
         var steamExecutable = _viewModel.SteamExecutablePath;
@@ -893,16 +1111,16 @@ public partial class MainWindow : Window
                 StringComparison.OrdinalIgnoreCase));
         if (match is not null)
         {
-            match.IsCurrentPlayAccount = true;
+            match.IsActiveInSteam = true;
             _viewModel.NativeSteamAccountState = NativeSteamAccountState.Match;
             _viewModel.CurrentSteamAccountStatus =
-                $"Current in Steam: {match.DisplayName} (@{match.SteamLoginName})";
+                $"Active in Steam: {match.SteamLoginName} (profile: {match.DisplayName})";
         }
         else
         {
             _viewModel.NativeSteamAccountState = NativeSteamAccountState.Mismatch;
             _viewModel.CurrentSteamAccountStatus =
-                $"Current in Steam: {activeAccount.PersonaName} (@{activeAccount.AccountName}), not in Switchboard";
+                $"Active in Steam: {activeAccount.AccountName} ({activeAccount.PersonaName}), not linked to a Switchboard profile";
         }
 
         _viewModel.NotifyCurrentPlayAccountChanged();
@@ -1056,12 +1274,128 @@ public partial class MainWindow : Window
         _viewModel.MarkNotificationsRead(account.Id);
     }
 
-    private void ShowWindowsNotification(ChatNotificationViewModel notification)
+    private async void ShowWindowsNotification(ChatNotificationViewModel notification)
     {
-        if (!_viewModel.EnableWindowsNotifications
-            || _notificationTrayIcon is null)
+        try
+        {
+            await DeliverWindowsNotificationAsync(notification);
+        }
+        catch (Exception exception) when (
+            _lifetime.IsCancellationRequested
+                && exception is (OperationCanceledException
+                    or ObjectDisposedException))
+        {
+            // A queued browser event may finish while the window is closing.
+        }
+    }
+
+    private async Task DeliverWindowsNotificationAsync(
+        ChatNotificationViewModel notification)
+    {
+        if (!_viewModel.EnableWindowsNotifications)
         {
             return;
+        }
+
+        var delivery = new WindowsNotificationDelivery(
+            notification.AccountId,
+            notification.Id,
+            notification.AccountDisplayName,
+            notification.AccountLoginName,
+            notification.SteamTitle,
+            notification.Preview,
+            notification.ReplacementTag,
+            _viewModel.ShowNotificationPreviews,
+            _notificationPrivacyGate.Capture());
+        var cleanupReady =
+            await EnsurePendingWindowsNotificationCleanupAsync();
+        var modernShown = cleanupReady
+            && await _windowsNotificationCommands.EnqueueAsync(
+                service => service.TryEnable()
+                    && _notificationPrivacyGate.ExecuteIfCurrent(
+                        delivery.PrivacyRevision,
+                        () => service.TryShow(
+                            delivery.AccountId,
+                            delivery.NotificationId,
+                            delivery.AccountIdentity,
+                            delivery.SteamTitle,
+                            delivery.Preview,
+                            delivery.ReplacementTag)),
+                _lifetimeToken);
+        if (_lifetime.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var accountStillExists = delivery.AccountId is not Guid accountId
+            || (_viewModel.Accounts.Any(account => account.Id == accountId)
+                && !_viewModel.IsAccountDeletionPending(accountId));
+        var previewWasRevoked =
+            (delivery.PreviewWasEnabled && !_viewModel.ShowNotificationPreviews)
+            || !_notificationPrivacyGate.IsCurrent(delivery.PrivacyRevision);
+        if (!_viewModel.EnableWindowsNotifications
+            || !accountStillExists
+            || previewWasRevoked)
+        {
+            if (modernShown)
+            {
+                _ = await _windowsNotificationCommands.EnqueueAsync(
+                    service =>
+                    {
+                        service.Remove(delivery.AccountId);
+                        return true;
+                    },
+                    _lifetimeToken);
+            }
+
+            return;
+        }
+
+        var compatibilityQueued = false;
+        if (!modernShown)
+        {
+            compatibilityQueued = QueueLegacyWindowsNotification(delivery);
+        }
+
+        UpdateWindowsNotificationStatus(
+            compatibilityQueued: compatibilityQueued);
+    }
+
+    private void RevokeNotificationPrivacy()
+    {
+        _notificationPrivacyGate.Revoke();
+        _pendingBalloonNotifications.Clear();
+        _activeBalloonNotification = null;
+        _balloonReleaseTimer.Stop();
+        _ = TrySetNotificationIconVisible(false);
+    }
+
+    private bool QueueLegacyWindowsNotification(WindowsNotificationDelivery delivery)
+    {
+        if (_notificationTrayIcon is null
+            || !_notificationPrivacyGate.IsCurrent(delivery.PrivacyRevision))
+        {
+            return false;
+        }
+
+        if (!TrySetNotificationIconVisible(true))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(delivery.ReplacementTag))
+        {
+            var retained = _pendingBalloonNotifications.Where(existing =>
+                existing.AccountId != delivery.AccountId
+                || !string.Equals(
+                    existing.ReplacementTag,
+                    delivery.ReplacementTag,
+                    StringComparison.Ordinal)).ToArray();
+            _pendingBalloonNotifications.Clear();
+            foreach (var existing in retained)
+            {
+                _pendingBalloonNotifications.Enqueue(existing);
+            }
         }
 
         while (_pendingBalloonNotifications.Count
@@ -1070,37 +1404,69 @@ public partial class MainWindow : Window
             _ = _pendingBalloonNotifications.Dequeue();
         }
 
-        _pendingBalloonNotifications.Enqueue(new WindowsNotificationDelivery(
-            notification.AccountId,
-            notification.AccountDisplayName,
-            notification.AccountLoginName,
-            notification.SteamTitle,
-            notification.Preview));
-        ShowNextWindowsNotification();
+        _pendingBalloonNotifications.Enqueue(delivery);
+        return ShowNextWindowsNotification();
     }
 
-    private void ShowNextWindowsNotification()
+    private bool ShowNextWindowsNotification()
     {
-        if (_activeBalloonNotification is not null
-            || !_notificationIcon.Visible
-            || !_pendingBalloonNotifications.TryDequeue(out var notification))
+        if (_activeBalloonNotification is not null)
         {
-            return;
+            return true;
         }
 
-        _activeBalloonNotification = notification;
-        var title = SafeText.SanitizeDisplayText(
-            $"{notification.AccountDisplayName} (@{notification.AccountLoginName}) • {notification.SteamTitle}",
-            "SteamSwitchboard message",
-            60);
-        _notificationIcon.ShowBalloonTip(
-            5_000,
-            title,
-            notification.Preview,
-            System.Windows.Forms.ToolTipIcon.Info);
-        _balloonReleaseTimer.Stop();
-        _balloonReleaseTimer.Interval = TimeSpan.FromSeconds(7);
-        _balloonReleaseTimer.Start();
+        if (!_legacyNotificationIconVisible)
+        {
+            return false;
+        }
+
+        WindowsNotificationDelivery? notification = null;
+        while (_pendingBalloonNotifications.TryDequeue(out var candidate))
+        {
+            var accountStillExists = candidate.AccountId is not Guid accountId
+                || (_viewModel.Accounts.Any(account => account.Id == accountId)
+                    && !_viewModel.IsAccountDeletionPending(accountId));
+            if (_notificationPrivacyGate.IsCurrent(candidate.PrivacyRevision)
+                && _viewModel.EnableWindowsNotifications
+                && accountStillExists)
+            {
+                notification = candidate;
+                break;
+            }
+        }
+
+        if (notification is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            _activeBalloonNotification = notification;
+            var title = SafeText.SanitizeDisplayText(
+                $"{notification.AccountDisplayName} • {notification.SteamTitle}",
+                "SteamSwitchboard message",
+                60);
+            _notificationIcon.ShowBalloonTip(
+                5_000,
+                title,
+                notification.Preview,
+                System.Windows.Forms.ToolTipIcon.Info);
+            _balloonReleaseTimer.Stop();
+            _balloonReleaseTimer.Interval = TimeSpan.FromSeconds(7);
+            _balloonReleaseTimer.Start();
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or InvalidOperationException
+                or Win32Exception)
+        {
+            _activeBalloonNotification = null;
+            _pendingBalloonNotifications.Clear();
+            _ = TrySetNotificationIconVisible(false);
+            return false;
+        }
     }
 
     private void OnNotificationsClicked(object sender, RoutedEventArgs e)
@@ -1108,15 +1474,43 @@ public partial class MainWindow : Window
         NotificationPopup.IsOpen = !NotificationPopup.IsOpen;
     }
 
-    private void OnClearNotificationsClicked(object sender, RoutedEventArgs e)
+    private async void OnClearNotificationsClicked(object sender, RoutedEventArgs e)
     {
+        RevokeNotificationPrivacy();
         _viewModel.ClearNotifications();
-        PurgeWindowsNotifications(accountId: null);
-        NotificationPopup.IsOpen = false;
+        try
+        {
+            var windowsCleanupConfirmed =
+                await PurgeWindowsNotificationsAsync(accountId: null);
+            NotificationPopup.IsOpen = false;
+            _viewModel.StatusMessage = windowsCleanupConfirmed
+                ? "Notification history cleared"
+                : "In-app history cleared. Windows could not confirm cleanup yet, so Switchboard will retry.";
+        }
+        catch (Exception exception) when (
+            _lifetime.IsCancellationRequested
+                && exception is (OperationCanceledException
+                    or ObjectDisposedException))
+        {
+            // Normal when the app closes while Windows history is clearing.
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or InvalidOperationException)
+        {
+            _viewModel.StatusMessage =
+                "In-app history was cleared, but the Windows cleanup request could not be saved. Try Clear again.";
+        }
     }
 
-    private void PurgeWindowsNotifications(Guid? accountId)
+    private async Task<bool> PurgeWindowsNotificationsAsync(Guid? accountId)
     {
+        _ = _viewModel.MarkWindowsNotificationCleanupPending(accountId);
+        await _viewModel.SaveAsync(_lifetimeToken);
+        var windowsCleanupConfirmed =
+            await EnsurePendingWindowsNotificationCleanupAsync();
+
         var retained = _pendingBalloonNotifications
             .Where(notification => accountId is not null
                 && notification.AccountId != accountId.Value)
@@ -1132,19 +1526,26 @@ public partial class MainWindow : Window
                 || _activeBalloonNotification.AccountId == accountId.Value);
         if (!removeActive)
         {
-            return;
+            return windowsCleanupConfirmed;
         }
 
         _activeBalloonNotification = null;
         _balloonReleaseTimer.Stop();
         var shouldRemainVisible = _viewModel.EnableWindowsNotifications
             && _notificationTrayIcon is not null;
-        _notificationIcon.Visible = false;
-        _notificationIcon.Visible = shouldRemainVisible;
+        _ = TrySetNotificationIconVisible(false);
+        _ = TrySetNotificationIconVisible(shouldRemainVisible);
         if (_pendingBalloonNotifications.Count > 0)
         {
             QueueNextWindowsNotification();
         }
+
+        return windowsCleanupConfirmed;
+    }
+
+    internal async Task ClearWindowsNotificationsForValidationAsync()
+    {
+        _ = await PurgeWindowsNotificationsAsync(accountId: null);
     }
 
     private async void OnNotificationClicked(object sender, RoutedEventArgs e)
@@ -1185,19 +1586,392 @@ public partial class MainWindow : Window
         ShowNextWindowsNotification();
     }
 
-    private void ApplyNotificationSettings()
+    private async Task<bool> EnsurePendingWindowsNotificationCleanupAsync()
+    {
+        return await _notificationCleanupBarrier.WaitForLatestAsync(
+            () => _viewModel.PendingWindowsNotificationCleanupRequestId,
+            cleanupRequestId =>
+            {
+                var removeAll =
+                    _viewModel.HasPendingWindowsNotificationHistoryClear;
+                var pendingAccountIds =
+                    _viewModel.AccountsPendingWindowsNotificationCleanup.ToArray();
+                return ExecuteWindowsNotificationCleanupAsync(
+                    removeAll,
+                    pendingAccountIds,
+                    cleanupRequestId);
+            });
+    }
+
+    private async Task<bool> ExecuteWindowsNotificationCleanupAsync(
+        bool removeAll,
+        Guid[] pendingAccountIds,
+        Guid cleanupRequestId)
+    {
+        var removed = await _windowsNotificationCommands.EnqueueAsync(
+            service => service.RemoveMany(removeAll, pendingAccountIds),
+            _lifetimeToken);
+        if (!removed)
+        {
+            return false;
+        }
+
+        try
+        {
+            await _viewModel.CompleteWindowsNotificationCleanupAsync(
+                removeAll,
+                pendingAccountIds,
+                cleanupRequestId,
+                _lifetimeToken);
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or InvalidOperationException)
+        {
+            _viewModel.StatusMessage =
+                "Windows alert history was cleared, but its cleanup receipt could not be saved; delivery will stay in compatibility mode until a retry succeeds.";
+            return false;
+        }
+    }
+
+    private async Task InitializeWindowsNotificationStateAsync()
+    {
+        var pendingAccountIds = _viewModel.AccountsPendingBrowserProfileDeletion
+            .Select(account => account.Id)
+            .ToArray();
+        var stateChanged = false;
+        if (!_viewModel.ShowNotificationPreviews
+            || !_viewModel.EnableWindowsNotifications)
+        {
+            stateChanged |= _viewModel.MarkWindowsNotificationCleanupPending(
+                accountId: null);
+        }
+
+        foreach (var accountId in pendingAccountIds)
+        {
+            stateChanged |= _viewModel.MarkWindowsNotificationCleanupPending(
+                accountId);
+        }
+
+        if (stateChanged)
+        {
+            await _viewModel.SaveAsync(_lifetimeToken);
+        }
+
+        _lifetimeToken.ThrowIfCancellationRequested();
+        var revision = Interlocked.Increment(ref _notificationSettingsRevision);
+        await ApplyNotificationSettingsAsync(revision);
+    }
+
+    private async Task ApplyNotificationSettingsAsync(int revision)
     {
         _pendingBalloonNotifications.Clear();
         _activeBalloonNotification = null;
         _balloonReleaseTimer.Stop();
-        _notificationIcon.Visible = false;
-        _notificationIcon.Visible = _viewModel.EnableWindowsNotifications
-            && _notificationTrayIcon is not null;
+        _ = TrySetNotificationIconVisible(false);
+
+        if (_lifetime.IsCancellationRequested
+            || revision != _notificationSettingsRevision)
+        {
+            return;
+        }
+
+        var notificationsEnabled = _viewModel.EnableWindowsNotifications;
+        WindowsNotificationStatusText.Text = notificationsEnabled
+            ? "Preparing modern Windows alerts in the background…"
+            : "Windows alerts are off. Existing Windows alert history is being cleared.";
+        var modernReady = false;
+        if (notificationsEnabled)
+        {
+            var cleanupReady =
+                await EnsurePendingWindowsNotificationCleanupAsync();
+            if (_lifetime.IsCancellationRequested
+                || revision != _notificationSettingsRevision)
+            {
+                return;
+            }
+
+            modernReady = cleanupReady
+                && await _windowsNotificationCommands.EnqueueAsync(
+                    service => service.TryEnable(),
+                    _lifetimeToken);
+        }
+        else
+        {
+            var pendingAccountIds =
+                _viewModel.AccountsPendingWindowsNotificationCleanup.ToArray();
+            var cleanupRequestId =
+                _viewModel.PendingWindowsNotificationCleanupRequestId;
+            var cleanupSucceeded =
+                await _windowsNotificationCommands.EnqueueAsync(
+                    service => service.Disable(),
+                    _lifetimeToken);
+            if (cleanupSucceeded
+                && cleanupRequestId is Guid completedRequestId)
+            {
+                await _viewModel.CompleteWindowsNotificationCleanupAsync(
+                    removedAll: true,
+                    pendingAccountIds,
+                    completedRequestId,
+                    _lifetimeToken);
+            }
+
+            WindowsNotificationStatusText.Text = _appNotifications.StatusText;
+        }
+
+        if (_lifetime.IsCancellationRequested
+            || revision != _notificationSettingsRevision)
+        {
+            return;
+        }
+
+        _ = TrySetNotificationIconVisible(
+            notificationsEnabled
+                && !modernReady
+                && _notificationTrayIcon is not null);
+        UpdateWindowsNotificationStatus();
+        if (modernReady
+            && _appNotifications.TryGetCurrentActivation() is { } activation)
+        {
+            OnWindowsAppNotificationActivated(_appNotifications, activation);
+        }
+    }
+
+    private async void OnTestWindowsNotificationClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await SendTestWindowsNotificationAsync(sender);
+        }
+        catch (Exception exception) when (
+            _lifetime.IsCancellationRequested
+                && exception is (OperationCanceledException
+                    or ObjectDisposedException))
+        {
+            // Normal when the app closes while the test alert is queued.
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or InvalidOperationException)
+        {
+            WindowsNotificationStatusText.Text =
+                "The Windows test alert could not save its pending privacy cleanup. Try again.";
+            if (sender is Button button)
+            {
+                button.IsEnabled = true;
+            }
+        }
+    }
+
+    private async Task SendTestWindowsNotificationAsync(object sender)
+    {
+        if (!EnsureStartupComplete())
+        {
+            return;
+        }
+
+        if (!_viewModel.EnableWindowsNotifications)
+        {
+            WindowsNotificationStatusText.Text =
+                "Turn on “Show Windows chat notifications” before sending a test.";
+            return;
+        }
+
+        var account = _viewModel.SelectedAccount;
+        var delivery = account is null
+            ? new WindowsNotificationDelivery(
+                null,
+                null,
+                "SteamSwitchboard",
+                string.Empty,
+                "Test alert",
+                "Windows alerts are working. Click to open Switchboard.",
+                SettingsTestReplacementTag,
+                false,
+                _notificationPrivacyGate.Capture())
+            : new WindowsNotificationDelivery(
+                account.Id,
+                null,
+                account.DisplayName,
+                account.SteamLoginName,
+                "Test alert",
+                "Windows alerts are working. Click to open this profile.",
+                SettingsTestReplacementTag,
+                false,
+                _notificationPrivacyGate.Capture());
+        if (sender is Button button)
+        {
+            button.IsEnabled = false;
+        }
+
+        WindowsNotificationStatusText.Text = "Sending a Windows test alert…";
+        if (_viewModel.RenewWindowsNotificationCleanupRequest())
+        {
+            await _viewModel.SaveAsync(_lifetimeToken);
+        }
+
+        var cleanupReady =
+            await EnsurePendingWindowsNotificationCleanupAsync();
+        var modernShown = cleanupReady
+            && await _windowsNotificationCommands.EnqueueAsync(
+                service => service.TryEnable()
+                    && _notificationPrivacyGate.ExecuteIfCurrent(
+                        delivery.PrivacyRevision,
+                        () => service.TryShow(
+                            delivery.AccountId,
+                            delivery.NotificationId,
+                            delivery.AccountIdentity,
+                            delivery.SteamTitle,
+                            delivery.Preview,
+                            delivery.ReplacementTag,
+                            isTest: true)),
+                _lifetimeToken);
+        if (_lifetime.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var accountStillExists = delivery.AccountId is not Guid accountId
+            || (_viewModel.Accounts.Any(item => item.Id == accountId)
+                && !_viewModel.IsAccountDeletionPending(accountId));
+        if (!_viewModel.EnableWindowsNotifications || !accountStillExists)
+        {
+            if (modernShown)
+            {
+                _ = await _windowsNotificationCommands.EnqueueAsync(
+                    service =>
+                    {
+                        service.Remove(delivery.AccountId);
+                        return true;
+                    },
+                    _lifetimeToken);
+            }
+
+            if (sender is Button cancelledButton)
+            {
+                cancelledButton.IsEnabled = true;
+            }
+
+            return;
+        }
+
+        var compatibilityQueued = false;
+        if (!modernShown)
+        {
+            compatibilityQueued = QueueLegacyWindowsNotification(delivery);
+        }
+
+        UpdateWindowsNotificationStatus(
+            isTest: true,
+            compatibilityQueued: compatibilityQueued);
+        if (sender is Button completedButton)
+        {
+            completedButton.IsEnabled = true;
+        }
+    }
+
+    private void OnOpenWindowsNotificationSettingsClicked(
+        object sender,
+        RoutedEventArgs e)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo(
+                "ms-settings:notifications")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception exception) when (
+            exception is Win32Exception or InvalidOperationException)
+        {
+            WindowsNotificationStatusText.Text =
+                "Windows notification settings could not be opened.";
+        }
+    }
+
+    private void OnWindowsAppNotificationActivated(
+        object? sender,
+        WindowsAppNotificationActivatedEventArgs e)
+    {
+        Dispatcher.BeginInvoke(async () =>
+        {
+            if (e.AccountId is Guid accountId)
+            {
+                var notification = e.NotificationId is Guid notificationId
+                    ? _viewModel.Notifications.FirstOrDefault(item =>
+                        item.Id == notificationId
+                        && item.AccountId == accountId)
+                    : null;
+                notification?.ReportClickedAndClose();
+                await OpenNotificationAsync(accountId);
+            }
+            else
+            {
+                OpenNotificationCenter();
+            }
+        });
+    }
+
+    private void UpdateWindowsNotificationStatus(
+        bool isTest = false,
+        bool compatibilityQueued = true)
+    {
+        if (_appNotifications.IsReady)
+        {
+            WindowsNotificationStatusText.Text = _appNotifications.StatusText;
+            return;
+        }
+
+        if (!_viewModel.EnableWindowsNotifications)
+        {
+            WindowsNotificationStatusText.Text = _appNotifications.StatusText;
+            return;
+        }
+
+        if (_notificationTrayIcon is null || !compatibilityQueued)
+        {
+            WindowsNotificationStatusText.Text = isTest
+                ? "Windows could not create a test alert. In-app notification history is still available."
+                : "Windows alerts are unavailable here. In-app notification history is still available.";
+            return;
+        }
+
+        WindowsNotificationStatusText.Text = isTest
+            ? "Compatibility test alert sent. If nothing appears, check Do not disturb and Windows notification settings."
+            : _appNotifications.StatusText;
     }
 
     private void OnNotificationIconDoubleClicked(object? sender, EventArgs e)
     {
         Dispatcher.BeginInvoke(ShowAndActivateWindow);
+    }
+
+    private bool TrySetNotificationIconVisible(bool visible)
+    {
+        if (visible && _notificationTrayIcon is null)
+        {
+            _legacyNotificationIconVisible = false;
+            return false;
+        }
+
+        try
+        {
+            _notificationIcon.Visible = visible;
+            _legacyNotificationIconVisible = visible;
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or InvalidOperationException
+                or Win32Exception)
+        {
+            _legacyNotificationIconVisible = false;
+            return false;
+        }
     }
 
     private async Task OpenNotificationAsync(Guid accountId)
@@ -1212,6 +1986,7 @@ public partial class MainWindow : Window
         ShowAndActivateWindow();
         NotificationPopup.IsOpen = false;
         _viewModel.SelectedAccount = account;
+        AccountList.SelectedItem = account;
         NavigateTo(AppSection.Chats);
         try
         {
@@ -1236,10 +2011,51 @@ public partial class MainWindow : Window
         Activate();
     }
 
-    private void OnWindowClosing(object? sender, CancelEventArgs e)
+    private async void OnWindowClosing(object? sender, CancelEventArgs e)
     {
+        if (_shutdownComplete)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        if (_shutdownStarted)
+        {
+            return;
+        }
+
+        _shutdownStarted = true;
+        IsEnabled = false;
         _playAccountTimer.Stop();
         _balloonReleaseTimer.Stop();
+
+        try
+        {
+            // Flush any setting/cleanup marker changed immediately before the
+            // close request. A failed Windows cleanup can then retry at startup.
+            await _viewModel.SaveAsync(CancellationToken.None);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or InvalidOperationException)
+        {
+            // Continue closing. Existing atomically saved state remains intact.
+        }
+
+        var removeAll = _viewModel.HasPendingWindowsNotificationHistoryClear;
+        var pendingAccountIds =
+            _viewModel.AccountsPendingWindowsNotificationCleanup.ToArray();
+        var cleanupRequestId =
+            _viewModel.PendingWindowsNotificationCleanupRequestId;
+        Task<bool>? finalCleanup = null;
+        if (removeAll || pendingAccountIds.Length > 0)
+        {
+            finalCleanup = _windowsNotificationCommands.EnqueueAsync(
+                service => service.RemoveMany(removeAll, pendingAccountIds),
+                CancellationToken.None);
+        }
+
         _lifetime.Cancel();
         foreach (var session in _chatSessions.Values)
         {
@@ -1253,16 +2069,66 @@ public partial class MainWindow : Window
         _viewModel.ClearNotifications();
         _pendingBalloonNotifications.Clear();
         _activeBalloonNotification = null;
-        _notificationIcon.Visible = false;
+        _ = TrySetNotificationIconVisible(false);
         _notificationIcon.Dispose();
         _notificationTrayIcon?.Dispose();
+        _appNotifications.Activated -= OnWindowsAppNotificationActivated;
+        _windowsNotificationCommands.Dispose();
+        var queueCompleted = await Task.WhenAny(
+            _windowsNotificationCommands.Completion,
+            Task.Delay(TimeSpan.FromSeconds(5)));
+        var queueDrained = ReferenceEquals(
+            queueCompleted,
+            _windowsNotificationCommands.Completion);
+        if (queueDrained)
+        {
+            await _windowsNotificationCommands.Completion;
+        }
+
+        if (finalCleanup is { IsCompletedSuccessfully: true }
+            && finalCleanup.Result
+            && cleanupRequestId is Guid completedRequestId)
+        {
+            try
+            {
+                await _viewModel.CompleteWindowsNotificationCleanupAsync(
+                    removeAll,
+                    pendingAccountIds,
+                    completedRequestId,
+                    CancellationToken.None);
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                    or UnauthorizedAccessException
+                    or InvalidOperationException)
+            {
+                // The durable marker remains and startup will retry cleanup.
+            }
+        }
+
+        if (queueDrained)
+        {
+            _appNotifications.Dispose();
+        }
+
         _lifetime.Dispose();
+        _shutdownComplete = true;
+        Close();
     }
 
     private sealed record WindowsNotificationDelivery(
-        Guid AccountId,
+        Guid? AccountId,
+        Guid? NotificationId,
         string AccountDisplayName,
         string AccountLoginName,
         string SteamTitle,
-        string Preview);
+        string Preview,
+        string? ReplacementTag,
+        bool PreviewWasEnabled,
+        long PrivacyRevision)
+    {
+        public string AccountIdentity => string.IsNullOrWhiteSpace(AccountLoginName)
+            ? AccountDisplayName
+            : $"{AccountDisplayName} — Steam login: {AccountLoginName}";
+    }
 }

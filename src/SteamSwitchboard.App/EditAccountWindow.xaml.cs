@@ -23,7 +23,7 @@ public partial class EditAccountWindow : Window
             ?? throw new ArgumentNullException(nameof(existingAccounts));
         DisplayNameTextBox.Text = account.DisplayName;
         AccountIdentityText.Text =
-            $"Current: {account.DisplayName} (@{account.SteamLoginName})";
+            $"Steam login name: {account.SteamLoginName} (unchanged here)";
         Loaded += (_, _) =>
         {
             DisplayNameTextBox.Focus();

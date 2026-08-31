@@ -24,7 +24,10 @@ public sealed class LaunchPolicyTests
 
         Assert.AreEqual(LaunchReadiness.AccountSwitchRequired, result.Readiness);
         Assert.IsFalse(result.CanLaunch);
-        StringAssert.Contains(result.Message, "Other");
+        StringAssert.Contains(result.Message, "other_login");
+        StringAssert.Contains(result.Message, "main_login");
+        Assert.IsFalse(
+            result.Message.Contains("play as", StringComparison.OrdinalIgnoreCase));
     }
 
     [TestMethod]

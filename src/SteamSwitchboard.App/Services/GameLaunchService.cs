@@ -44,10 +44,12 @@ public sealed class GameLaunchService
     public LaunchAssessment LaunchIfReady(
         AccountProfile? account,
         InstalledGame? game,
-        string? configuredSteamPath)
+        string? configuredSteamPath,
+        CancellationToken cancellationToken = default)
     {
         lock (_launchGate)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var first = Evaluate(account, game, configuredSteamPath);
             if (!first.Assessment.CanLaunch)
             {
@@ -55,6 +57,7 @@ public sealed class GameLaunchService
             }
 
             _verificationDelay(TimeSpan.FromMilliseconds(125));
+            cancellationToken.ThrowIfCancellationRequested();
             var confirmed = Evaluate(account, game, configuredSteamPath);
             if (!confirmed.Assessment.CanLaunch
                 || !HasSameLaunchAuthority(first, confirmed))
@@ -77,6 +80,7 @@ public sealed class GameLaunchService
             }
 
             _verificationDelay(TimeSpan.FromMilliseconds(125));
+            cancellationToken.ThrowIfCancellationRequested();
             var final = Evaluate(account, game, configuredSteamPath);
             if (!final.Assessment.CanLaunch
                 || !HasSameLaunchAuthority(confirmed, final))
@@ -88,14 +92,14 @@ public sealed class GameLaunchService
                     : final.Assessment;
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             var startInfo = new ProcessStartInfo(confirmed.SteamExecutable!)
             {
                 UseShellExecute = false,
                 WorkingDirectory = Path.GetDirectoryName(confirmed.SteamExecutable)
             };
-            startInfo.ArgumentList.Add("-applaunch");
             startInfo.ArgumentList.Add(
-                game.AppId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                $"steam://run/{game.AppId.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
             _processStarter(startInfo);
             return final.Assessment;
         }

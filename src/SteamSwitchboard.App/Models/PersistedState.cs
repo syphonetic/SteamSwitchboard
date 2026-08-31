@@ -2,7 +2,7 @@ namespace SteamSwitchboard.Models;
 
 public sealed class PersistedState
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -15,4 +15,10 @@ public sealed class PersistedState
     public Guid? LastPlayAccountId { get; set; }
 
     public List<Guid> PendingBrowserProfileDeletionIds { get; set; } = [];
+
+    public bool PendingWindowsNotificationHistoryClear { get; set; }
+
+    public List<Guid> PendingWindowsNotificationAccountCleanupIds { get; set; } = [];
+
+    public Guid? PendingWindowsNotificationCleanupRequestId { get; set; }
 }

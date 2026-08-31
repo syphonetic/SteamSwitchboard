@@ -16,7 +16,7 @@ public sealed class AccountViewModel : ObservableObject
 {
     private ChatConnectionState _connectionState = ChatConnectionState.Starting;
     private int _unreadCount;
-    private bool _isCurrentPlayAccount;
+    private bool _isActiveInSteam;
     private bool _isSleeping;
 
     public AccountViewModel(AccountProfile profile)
@@ -32,7 +32,7 @@ public sealed class AccountViewModel : ObservableObject
 
     public string SteamLoginName => Profile.SteamLoginName;
 
-    public string PlayAccountLabel => $"{DisplayName} (@{SteamLoginName})";
+    public string LaunchIdentityLabel => $"{DisplayName} — Steam login: {SteamLoginName}";
 
     public string AccentHex => Profile.AccentHex;
 
@@ -85,10 +85,10 @@ public sealed class AccountViewModel : ObservableObject
 
     public string UnreadLabel => UnreadCount > 99 ? "99+" : UnreadCount.ToString();
 
-    public bool IsCurrentPlayAccount
+    public bool IsActiveInSteam
     {
-        get => _isCurrentPlayAccount;
-        set => SetProperty(ref _isCurrentPlayAccount, value);
+        get => _isActiveInSteam;
+        set => SetProperty(ref _isActiveInSteam, value);
     }
 
     public bool IsSleeping
@@ -107,7 +107,7 @@ public sealed class AccountViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(DisplayName));
         OnPropertyChanged(nameof(SteamLoginName));
-        OnPropertyChanged(nameof(PlayAccountLabel));
+        OnPropertyChanged(nameof(LaunchIdentityLabel));
         OnPropertyChanged(nameof(AccentHex));
         OnPropertyChanged(nameof(Initial));
     }

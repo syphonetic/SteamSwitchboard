@@ -14,6 +14,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'path-utils.ps1')
 
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([string]::IsNullOrWhiteSpace($ExpectedVersion)) {
@@ -31,7 +32,7 @@ if ($ExpectedVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
 function Assert-SafeLocalFile {
     param([Parameter(Mandatory)][string]$Path)
 
-    if (-not [System.IO.Path]::IsPathFullyQualified($Path) `
+    if (-not [System.IO.Path]::IsPathRooted($Path) `
         -or $Path.StartsWith('\\', [System.StringComparison]::Ordinal) `
         -or $Path.StartsWith('\\?\', [System.StringComparison]::Ordinal) `
         -or $Path.StartsWith('\\.\', [System.StringComparison]::Ordinal)) {
@@ -47,7 +48,7 @@ function Assert-SafeLocalFile {
     }
 
     $current = $root
-    $relative = [System.IO.Path]::GetRelativePath($root, $Path)
+    $relative = Get-ContainedRelativePath -RootPath $root -CandidatePath $Path
     foreach ($component in $relative.Split(
         @([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar),
         [System.StringSplitOptions]::RemoveEmptyEntries)) {
@@ -107,6 +108,7 @@ $expectedEntries = @(
     "$expectedRootName/docs/PRIVACY.md",
     "$expectedRootName/docs/VALIDATION.md",
     "$expectedRootName/artifacts/ui-final.png",
+    "$expectedRootName/Assets/Branding/SteamSwitchboard-app-logo.png",
     "$expectedRootName/src/SteamSwitchboard.App/Assets/Branding/SteamSwitchboard-logo-v1.png"
 )
 
@@ -246,7 +248,13 @@ try {
         throw "The packaged version '$version' does not match '$ExpectedVersion'."
     }
 
-    Add-Type -AssemblyName System.Drawing.Common
+    $drawingAssembly = if ($PSVersionTable.PSEdition -eq 'Desktop') {
+        'System.Drawing'
+    }
+    else {
+        'System.Drawing.Common'
+    }
+    Add-Type -AssemblyName $drawingAssembly
     $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($executable)
     try {
         if ($null -eq $icon -or $icon.Width -lt 16 -or $icon.Height -lt 16) {

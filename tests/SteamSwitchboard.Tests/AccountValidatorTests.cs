@@ -22,7 +22,9 @@ public sealed class AccountValidatorTests
 
         var error = AccountValidator.Validate(candidate, [existing]);
 
-        Assert.AreEqual("That Steam account is already in Switchboard.", error);
+        Assert.AreEqual(
+            "That Steam login is already linked to another Switchboard profile.",
+            error);
     }
 
     [TestMethod]

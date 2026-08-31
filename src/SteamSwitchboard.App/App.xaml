@@ -28,28 +28,9 @@
         <SolidColorBrush x:Key="WarningBrush" Color="{StaticResource WarningColor}" />
         <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
 
-        <DrawingImage x:Key="AppIcon">
-            <DrawingImage.Drawing>
-                <DrawingGroup>
-                    <GeometryDrawing Brush="{StaticResource AccentStrongBrush}">
-                        <GeometryDrawing.Geometry>
-                            <EllipseGeometry Center="16,16" RadiusX="15" RadiusY="15" />
-                        </GeometryDrawing.Geometry>
-                    </GeometryDrawing>
-                    <GeometryDrawing>
-                        <GeometryDrawing.Pen>
-                            <Pen Brush="White" Thickness="2.5" StartLineCap="Round" EndLineCap="Round" LineJoin="Round" />
-                        </GeometryDrawing.Pen>
-                        <GeometryDrawing.Geometry>
-                            <GeometryGroup>
-                                <PathGeometry Figures="M 8,11 L 22,11 M 18,7 L 22,11 L 18,15" />
-                                <PathGeometry Figures="M 24,21 L 10,21 M 14,17 L 10,21 L 14,25" />
-                            </GeometryGroup>
-                        </GeometryDrawing.Geometry>
-                    </GeometryDrawing>
-                </DrawingGroup>
-            </DrawingImage.Drawing>
-        </DrawingImage>
+        <BitmapImage x:Key="AppIcon"
+                     UriSource="/SteamSwitchboard;component/Assets/SteamSwitchboard.ico"
+                     CacheOption="OnLoad" />
 
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
         <converters:HexToBrushConverter x:Key="HexToBrushConverter" />
@@ -77,6 +58,13 @@
         <Style TargetType="TextBlock">
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        </Style>
+
+        <Style TargetType="Label">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
 
         <Style x:Key="HeadingText" TargetType="TextBlock">

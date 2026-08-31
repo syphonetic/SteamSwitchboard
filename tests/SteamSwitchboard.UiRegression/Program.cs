@@ -13,6 +13,8 @@ using SteamSwitchboard.Models;
 using SteamSwitchboard.Services;
 using SteamSwitchboard.ViewModels;
 using WpfButton = System.Windows.Controls.Button;
+using WpfImage = System.Windows.Controls.Image;
+using WpfListBox = System.Windows.Controls.ListBox;
 
 internal static class Program
 {
@@ -22,13 +24,19 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length > 1)
+        var notificationSmoke = args is ["--notification-smoke"];
+
+        if (args.Length > 1
+            || (args.Length == 1
+                && !notificationSmoke
+                && args[0].StartsWith("--")))
         {
-            Console.Error.WriteLine("Usage: SteamSwitchboard.UiRegression [screenshot.png]");
+            Console.Error.WriteLine(
+                "Usage: SteamSwitchboard.UiRegression [screenshot.png | --notification-smoke]");
             return 2;
         }
 
-        var screenshotPath = args.Length == 1
+        var screenshotPath = args.Length == 1 && !notificationSmoke
             ? Path.GetFullPath(args[0])
             : Path.Combine(
                 Path.GetTempPath(),
@@ -41,8 +49,14 @@ internal static class Program
 
         try
         {
-            Run(disposableRoot, screenshotPath);
+            Run(disposableRoot, screenshotPath, notificationSmoke);
             Console.WriteLine($"Composed screenshot: {screenshotPath}");
+            if (notificationSmoke)
+            {
+                Console.WriteLine(
+                    "Windows notification submission and cleanup: PASS");
+            }
+
             Console.WriteLine("SteamSwitchboard UI regression validation passed.");
             return 0;
         }
@@ -57,7 +71,10 @@ internal static class Program
         }
     }
 
-    private static void Run(string disposableRoot, string screenshotPath)
+    private static void Run(
+        string disposableRoot,
+        string screenshotPath,
+        bool notificationSmoke)
     {
         var paths = new AppPaths(disposableRoot);
         paths.EnsureCreated();
@@ -83,7 +100,7 @@ internal static class Program
             Settings = new AppSettings
             {
                 KeepAllChatsLive = true,
-                EnableWindowsNotifications = false
+                EnableWindowsNotifications = notificationSmoke
             }
         }).GetAwaiter().GetResult();
 
@@ -121,6 +138,7 @@ internal static class Program
             ShutdownMode = ShutdownMode.OnExplicitShutdown,
             Resources = LoadApplicationResources()
         };
+        Console.WriteLine("Harness application resources loaded.");
         var window = new MainWindow(
             viewModel,
             paths,
@@ -132,6 +150,7 @@ internal static class Program
             ShowInTaskbar = false,
             Topmost = true
         };
+        Console.WriteLine("Harness main window constructed.");
         window.ChatSessionInitializationStarted += account =>
         {
             if (!startOrder.Contains(account.Id))
@@ -142,6 +161,10 @@ internal static class Program
         Exception? failure = null;
         var inputValidated = false;
         var reconnectTriggered = false;
+        var notificationTestTriggered = !notificationSmoke;
+        var notificationTestValidated = !notificationSmoke;
+        var notificationValidationBusy = false;
+        WpfButton? notificationTestButton = null;
         var started = Stopwatch.StartNew();
 
         var recoveryTimer = new DispatcherTimer(DispatcherPriority.Input)
@@ -169,8 +192,10 @@ internal static class Program
                     "The workspace Reconnect button was not found.");
             if (!reconnect.IsVisible)
             {
-                throw new InvalidOperationException(
-                    "A timed-out workspace did not expose its recovery action.");
+                // The state notification can precede WPF's next layout pass.
+                // Retry until the bounded harness deadline instead of treating
+                // that normal rendering interval as a product failure.
+                return;
             }
 
             reconnectTriggered = true;
@@ -193,6 +218,7 @@ internal static class Program
                 }
 
                 ValidateInteractiveShell(window, viewModel);
+                ValidateProfileIdentityAndBranding(window);
                 SaveComposedWindow(window, screenshotPath);
                 ValidateAccountSidebarIsNotOverpainted(window);
                 inputValidated = true;
@@ -204,6 +230,85 @@ internal static class Program
             }
         };
 
+        var notificationTimer = new DispatcherTimer(DispatcherPriority.Normal)
+        {
+            Interval = TimeSpan.FromMilliseconds(100)
+        };
+        notificationTimer.Tick += async (_, _) =>
+        {
+            if (!notificationSmoke
+                || !inputValidated
+                || notificationValidationBusy)
+            {
+                return;
+            }
+
+            try
+            {
+                if (!notificationTestTriggered)
+                {
+                    var settings = (WpfButton?)window.FindName("SettingsNavButton")
+                        ?? throw new InvalidOperationException(
+                            "The Settings button was not found for notification validation.");
+                    settings.RaiseEvent(new RoutedEventArgs(WpfButton.ClickEvent));
+                    notificationTestButton =
+                        (WpfButton?)window.FindName("TestWindowsNotificationButton")
+                        ?? throw new InvalidOperationException(
+                            "The test-alert button was not found.");
+                    notificationTestTriggered = true;
+                    notificationTestButton.RaiseEvent(
+                        new RoutedEventArgs(WpfButton.ClickEvent));
+                    return;
+                }
+
+                if (notificationTestButton?.IsEnabled != true)
+                {
+                    return;
+                }
+
+                var status = (TextBlock?)window.FindName(
+                    "WindowsNotificationStatusText")
+                    ?? throw new InvalidOperationException(
+                        "The Windows notification status was not found.");
+                if (!status.Text.StartsWith(
+                        "Test alert submitted to Windows.",
+                        StringComparison.Ordinal)
+                    && !status.Text.StartsWith(
+                        "Compatibility test alert sent.",
+                        StringComparison.Ordinal))
+                {
+                    if (status.Text.Contains(
+                            "could not create a test alert",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException(status.Text);
+                    }
+
+                    return;
+                }
+
+                notificationValidationBusy = true;
+                Console.WriteLine($"Notification path: {status.Text}");
+                await window.ClearWindowsNotificationsForValidationAsync();
+                notificationTestValidated = true;
+                notificationTimer.Stop();
+                var chats = (WpfButton?)window.FindName("ChatsNavButton")
+                    ?? throw new InvalidOperationException(
+                        "The Chats button was not found after notification validation.");
+                chats.RaiseEvent(new RoutedEventArgs(WpfButton.ClickEvent));
+            }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+                notificationTimer.Stop();
+                CloseHarness(window);
+            }
+            finally
+            {
+                notificationValidationBusy = false;
+            }
+        };
+
         var completionTimer = new DispatcherTimer(DispatcherPriority.Normal)
         {
             Interval = TimeSpan.FromMilliseconds(500)
@@ -212,6 +317,7 @@ internal static class Program
         {
             var startupPending = !inputValidated
                 || !reconnectTriggered
+                || !notificationTestValidated
                 || sessionCreationCounts.GetValueOrDefault(first.Id) < 2
                 || startOrder.Count < 2
                 || viewModel.Accounts.Any(account =>
@@ -223,12 +329,20 @@ internal static class Program
 
             completionTimer.Stop();
             recoveryTimer.Stop();
+            notificationTimer.Stop();
             try
             {
                 if (startupPending)
                 {
                     throw new InvalidOperationException(
-                        "A browser workspace exceeded its bounded startup window.");
+                        "A browser workspace exceeded its bounded startup window. "
+                        + $"input={inputValidated}, reconnect={reconnectTriggered}, "
+                        + $"first creations={sessionCreationCounts.GetValueOrDefault(first.Id)}, "
+                        + $"start order={startOrder.Count}, states="
+                        + string.Join(
+                            ", ",
+                            viewModel.Accounts.Select(account =>
+                                $"{account.DisplayName}:{account.ConnectionState}")));
                 }
 
                 if (startOrder[0] != first.Id || startOrder[1] != second.Id)
@@ -247,8 +361,10 @@ internal static class Program
 
         application.MainWindow = window;
         window.Show();
+        Console.WriteLine("Harness main window shown.");
         recoveryTimer.Start();
         inputTimer.Start();
+        notificationTimer.Start();
         completionTimer.Start();
         Dispatcher.Run();
 
@@ -285,12 +401,32 @@ internal static class Program
             throw new InvalidOperationException("The Settings button did not navigate.");
         }
 
+        if (!string.Equals(
+                System.Windows.Automation.AutomationProperties.GetItemStatus(settings),
+                "Current page",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The current Settings page was not exposed to UI Automation.");
+        }
+
         var chats = (WpfButton?)window.FindName("ChatsNavButton")
             ?? throw new InvalidOperationException("The Chats button was not found.");
         chats.RaiseEvent(new RoutedEventArgs(WpfButton.ClickEvent));
         if (viewModel.SelectedSection != AppSection.Chats)
         {
             throw new InvalidOperationException("The Chats button did not navigate.");
+        }
+
+        if (!string.Equals(
+                System.Windows.Automation.AutomationProperties.GetItemStatus(chats),
+                "Current page",
+                StringComparison.Ordinal)
+            || !string.IsNullOrEmpty(
+                System.Windows.Automation.AutomationProperties.GetItemStatus(settings)))
+        {
+            throw new InvalidOperationException(
+                "The current Chats page state was not updated for UI Automation.");
         }
 
         var handle = new WindowInteropHelper(window).Handle;
@@ -353,6 +489,104 @@ internal static class Program
         }
 
         Console.WriteLine($"Sidebar near-white ratio: {whiteRatio:P2}");
+    }
+
+    private static void ValidateProfileIdentityAndBranding(MainWindow window)
+    {
+        window.UpdateLayout();
+        var card = (FrameworkElement?)window.FindName("SelectedProfileIdentityCard")
+            ?? throw new InvalidOperationException(
+                "The selected-profile identity card was not found.");
+        var nickname = (FrameworkElement?)window.FindName("SelectedProfileNicknameText")
+            ?? throw new InvalidOperationException(
+                "The centered profile nickname was not found.");
+        var editButton = (FrameworkElement?)window.FindName("EditProfileNicknameButton")
+            ?? throw new InvalidOperationException(
+                "The profile nickname edit button was not found.");
+        var logo = (WpfImage?)window.FindName("HeaderBrandLogo")
+            ?? throw new InvalidOperationException("The header brand logo was not found.");
+        var accountList = (WpfListBox?)window.FindName("AccountList")
+            ?? throw new InvalidOperationException("The account list was not found.");
+
+        var nicknameCenter = nickname.TranslatePoint(
+            new System.Windows.Point(nickname.ActualWidth / 2, 0),
+            card).X;
+        var cardCenter = card.ActualWidth / 2;
+        if (Math.Abs(nicknameCenter - cardCenter) > 1.5)
+        {
+            throw new InvalidOperationException(
+                $"Profile nickname center {nicknameCenter:F1} does not match card center {cardCenter:F1}.");
+        }
+
+        var nicknameRight = nickname.TranslatePoint(
+            new System.Windows.Point(nickname.ActualWidth, 0),
+            card).X;
+        var editLeft = editButton.TranslatePoint(
+            new System.Windows.Point(0, 0),
+            card).X;
+        if (nicknameRight > editLeft)
+        {
+            throw new InvalidOperationException(
+                "The centered profile identity overlaps the Edit action.");
+        }
+
+        if (logo.Source is not System.Windows.Media.Imaging.BitmapImage
+            { PixelWidth: 512, PixelHeight: 512 })
+        {
+            throw new InvalidOperationException(
+                "The generated SteamSwitchboard logo was not decoded into the header.");
+        }
+
+        if (window.Icon is not System.Windows.Media.Imaging.BitmapSource)
+        {
+            throw new InvalidOperationException(
+                "The generated SteamSwitchboard icon was not applied to the window.");
+        }
+
+        if (!string.IsNullOrEmpty(
+                System.Windows.Automation.AutomationProperties.GetName(logo)))
+        {
+            throw new InvalidOperationException(
+                "The decorative header logo was exposed as duplicate accessible content.");
+        }
+
+        if (accountList.ItemContainerGenerator.ContainerFromIndex(0)
+                is not ListBoxItem selectedItem)
+        {
+            throw new InvalidOperationException(
+                "The selected profile row was not rendered.");
+        }
+
+        selectedItem.ApplyTemplate();
+        if (selectedItem.Template.FindName("ItemBorder", selectedItem)
+                is not Border selectionBorder
+            || selectionBorder.BorderThickness.Left < 3
+            || selectionBorder.BorderBrush is not System.Windows.Media.SolidColorBrush accent
+            || accent.Color != System.Windows.Media.Color.FromRgb(0x66, 0xC0, 0xF4))
+        {
+            throw new InvalidOperationException(
+                "The selected profile does not have a high-contrast accent marker.");
+        }
+
+        var packagedLogoPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Assets",
+            "Branding",
+            "SteamSwitchboard-app-logo.png");
+        using var packagedLogo = File.OpenRead(packagedLogoPath);
+        var packagedHash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(packagedLogo));
+        if (!string.Equals(
+                packagedHash,
+                "B684FFBB817F43B3992B44D06EAA04DBFCADFA4CBDD1F2A86572317F4FB59993",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The packaged header logo does not match the generated brand asset.");
+        }
+
+        Console.WriteLine(
+            "Profile centering, selected marker, accessible navigation, and generated branding: PASS");
     }
 
     private static void SaveComposedWindow(Window window, string outputPath)

@@ -2,7 +2,7 @@
 
 All notable changes are documented here.
 
-## 1.0.0 — 2026-08-30
+## 1.0.0 — 2026-08-31
 
 First GitHub-ready source release and self-contained Windows package.
 
@@ -10,13 +10,13 @@ First GitHub-ready source release and self-contained Windows package.
 
 - Added up to 512 isolated, persistent official Steam web-chat profiles, with a safe 16-workspace live budget and least-recently-used on-demand reopening beyond it.
 - Added default always-connected startup within the live-workspace budget, with an optional memory-saving background-sleep setting.
-- Added account-aware Windows and in-app chat notifications showing the receiving profile/login and Steam-provided notification title, with tagged replacement, native click/close lifecycle, correlated unread fallback, global/per-profile flood controls, a master Windows-alert switch, privacy-safe preview controls, and ambiguity-safe Windows-alert clicks that open the labelled notification center.
-- Added editable friendly profile names without changing the immutable Steam login name used for native launch verification.
-- Added installed-game discovery across Steam library folders.
-- Added a saved, independent **Play account** drop-down plus account-aware launch verification, guided native Steam account switching, and automatic launch after the requested account is verified.
+- Added account-aware modern Windows alerts with a compatibility tray fallback, receiving-profile/login/sender labelling, notification-scoped opaque activation, opaque tagged replacement, 24-hour/reboot expiry, matching native click/close lifecycle, correlated unread fallback, global/per-profile flood controls, a sticky master switch, an ordered bounded command queue, generation-keyed delivery barriers, durable cleanup receipts with startup replay, bounded shutdown draining, privacy-safe preview controls, a delivery-status panel, a real replaceable test alert, and a Windows-settings shortcut.
+- Added editable private profile nicknames, clear nickname-versus-Steam-login language, and safe relinking to a native login detected from Steam's local account cache.
+- Added bounded local Steam application-manifest discovery across library folders, with truthful copy that leaves install readiness and actual startup to Steam.
+- Added a saved **Required Steam account** selector, truthful **Launch with Steam** actions, guided native Steam account switching, cancellation immediately before native process invocation, and Valve's official `steam://run/<AppID>` handoff only after the required login is verified.
 - Added explicit profile forgetting with browser-data clearing and profile deletion.
-- Added an original SteamSwitchboard brand mark, responsive application icon set, high-DPI keyboard-accessible WPF interface, and beginner onboarding.
-- Kept the full shell interactive while isolated chat browsers start, bounded every browser startup attempt, prevented hidden WebView surfaces from painting across the sidebar, and clamped the native window to the active monitor at per-monitor DPI.
+- Added an original SteamSwitchboard brand mark and used it consistently in the executable, title bar, dialogs, product header, and About panel, plus a high-contrast selected-profile marker, screen-reader current-page state, a responsive high-DPI keyboard-accessible WPF interface, and beginner onboarding.
+- Kept the full shell interactive while isolated chat browsers, notification support, and native launch checks start; bounded every browser startup attempt; removed a re-entrant two-way profile-selection binding; prevented hidden WebView surfaces from painting across the sidebar; and clamped the native window to the active monitor at per-monitor DPI.
 
 ### Security and privacy
 
@@ -31,7 +31,8 @@ First GitHub-ready source release and self-contained Windows package.
 
 ### Quality and release
 
-- Added 131 automated tests, a repeatable composed-window WPF/WebView2 regression harness, plus Semgrep, Trivy, and transitive dependency auditing.
+- Added 155 automated tests, a repeatable composed-window WPF/WebView2 regression harness, an opt-in real Windows-alert smoke path, plus Semgrep, Trivy, and transitive dependency auditing.
 - Enforced signed NuGet source policy, an isolated clean-cache signer check, lock files, warnings/security diagnostics as build errors, and zero-warning Release builds.
 - Added a read-only GitHub Actions gate with pinned Semgrep and Trivy versions that must pass before Windows compilation, tests, packaging, or tag-artifact upload.
 - Added deterministic ZIP metadata, pre-extraction traversal/link/resource/session-data checks, adversarial package-validator fixtures, and clean-install smoke assertions.
+- Kept icon, validation, and deterministic packaging scripts compatible with built-in Windows PowerShell 5.1 while preserving path-containment and filesystem-link checks.

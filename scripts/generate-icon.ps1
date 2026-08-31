@@ -1,31 +1,35 @@
 [CmdletBinding()]
 param(
-    [string]$OutputPath = (Join-Path $PSScriptRoot '..\src\SteamSwitchboard.App\Assets\SteamSwitchboard.ico')
+    [string]$OutputPath
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'path-utils.ps1')
+
+if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+    $OutputPath = Join-Path $PSScriptRoot '..\src\SteamSwitchboard.App\Assets\SteamSwitchboard.ico'
+}
 
 Add-Type -AssemblyName PresentationCore, WindowsBase
 
 $resolvedOutput = [System.IO.Path]::GetFullPath($OutputPath)
 $expectedRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$relativeOutput = [System.IO.Path]::GetRelativePath($expectedRoot, $resolvedOutput)
-$escapesProject = [System.IO.Path]::IsPathRooted($relativeOutput) `
-    -or $relativeOutput -eq '..' `
-    -or $relativeOutput.StartsWith(
-        "..$([System.IO.Path]::DirectorySeparatorChar)",
-        [System.StringComparison]::Ordinal)
+$relativeOutput = Get-ContainedRelativePath `
+    -RootPath $expectedRoot `
+    -CandidatePath $resolvedOutput
 $isIcon = [System.IO.Path]::GetExtension($resolvedOutput).Equals(
     '.ico',
     [System.StringComparison]::OrdinalIgnoreCase)
-if ($escapesProject -or -not $isIcon) {
+if (-not $isIcon) {
     throw "The icon output must stay inside the SteamSwitchboard project."
 }
 
 $outputDirectory = [System.IO.Path]::GetDirectoryName($resolvedOutput)
 $currentDirectory = $expectedRoot
-$relativeDirectory = [System.IO.Path]::GetRelativePath($expectedRoot, $outputDirectory)
+$relativeDirectory = Get-ContainedRelativePath `
+    -RootPath $expectedRoot `
+    -CandidatePath $outputDirectory
 foreach ($component in $relativeDirectory.Split(
     @([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar),
     [System.StringSplitOptions]::RemoveEmptyEntries)) {
@@ -50,72 +54,6 @@ $brandSource.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnL
 $brandSource.UriSource = [Uri]$brandSourcePath
 $brandSource.EndInit()
 $brandSource.Freeze()
-
-function New-IconPng {
-    param([Parameter(Mandatory)][int]$Size)
-
-    $visual = [System.Windows.Media.DrawingVisual]::new()
-    $drawing = $visual.RenderOpen()
-    try {
-        $background = [System.Windows.Media.SolidColorBrush]::new(
-            [System.Windows.Media.Color]::FromRgb(0x1A, 0x9F, 0xFF))
-        $drawing.DrawRoundedRectangle(
-            $background,
-            $null,
-            [System.Windows.Rect]::new(0, 0, $Size, $Size),
-            $Size * 0.25,
-            $Size * 0.25)
-
-        $stroke = [System.Windows.Media.SolidColorBrush]::new(
-            [System.Windows.Media.Colors]::White)
-        $pen = [System.Windows.Media.Pen]::new($stroke, [Math]::Max(1.5, $Size * 0.07))
-        $pen.StartLineCap = [System.Windows.Media.PenLineCap]::Round
-        $pen.EndLineCap = [System.Windows.Media.PenLineCap]::Round
-        $pen.LineJoin = [System.Windows.Media.PenLineJoin]::Round
-
-        $drawing.DrawLine($pen,
-            [System.Windows.Point]::new($Size * 0.23, $Size * 0.35),
-            [System.Windows.Point]::new($Size * 0.74, $Size * 0.35))
-        $drawing.DrawLine($pen,
-            [System.Windows.Point]::new($Size * 0.62, $Size * 0.23),
-            [System.Windows.Point]::new($Size * 0.75, $Size * 0.35))
-        $drawing.DrawLine($pen,
-            [System.Windows.Point]::new($Size * 0.75, $Size * 0.35),
-            [System.Windows.Point]::new($Size * 0.62, $Size * 0.47))
-
-        $drawing.DrawLine($pen,
-            [System.Windows.Point]::new($Size * 0.77, $Size * 0.65),
-            [System.Windows.Point]::new($Size * 0.26, $Size * 0.65))
-        $drawing.DrawLine($pen,
-            [System.Windows.Point]::new($Size * 0.38, $Size * 0.53),
-            [System.Windows.Point]::new($Size * 0.25, $Size * 0.65))
-        $drawing.DrawLine($pen,
-            [System.Windows.Point]::new($Size * 0.25, $Size * 0.65),
-            [System.Windows.Point]::new($Size * 0.38, $Size * 0.77))
-    }
-    finally {
-        $drawing.Close()
-    }
-
-    $bitmap = [System.Windows.Media.Imaging.RenderTargetBitmap]::new(
-        $Size,
-        $Size,
-        96,
-        96,
-        [System.Windows.Media.PixelFormats]::Pbgra32)
-    $bitmap.Render($visual)
-
-    $encoder = [System.Windows.Media.Imaging.PngBitmapEncoder]::new()
-    $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
-    $stream = [System.IO.MemoryStream]::new()
-    try {
-        $encoder.Save($stream)
-        return $stream.ToArray()
-    }
-    finally {
-        $stream.Dispose()
-    }
-}
 
 function New-BrandIconPng {
     param([Parameter(Mandatory)][int]$Size)
@@ -155,12 +93,7 @@ $sizes = @(16, 24, 32, 48, 64, 128, 256)
 $images = foreach ($size in $sizes) {
     [pscustomobject]@{
         Size = $size
-        Data = if ($size -le 48) {
-            New-IconPng -Size $size
-        }
-        else {
-            New-BrandIconPng -Size $size
-        }
+        Data = New-BrandIconPng -Size $size
     }
 }
 
@@ -205,7 +138,7 @@ finally {
 }
 
 try {
-    [System.IO.File]::Move($temporaryIcon, $resolvedOutput, $true)
+    Move-FileReplacing -SourcePath $temporaryIcon -DestinationPath $resolvedOutput
 }
 finally {
     if (Test-Path -LiteralPath $temporaryIcon) {

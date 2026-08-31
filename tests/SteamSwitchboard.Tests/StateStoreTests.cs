@@ -234,6 +234,80 @@ public sealed class StateStoreTests
     }
 
     [TestMethod]
+    public async Task SaveAndLoad_RoundTripsDetachedWindowsNotificationCleanup()
+    {
+        using var temporary = new TemporaryDirectory();
+        var statePath = System.IO.Path.Combine(temporary.Path, "state.json");
+        var detachedAccountId = Guid.NewGuid();
+        var state = new PersistedState
+        {
+            PendingWindowsNotificationAccountCleanupIds = [detachedAccountId]
+        };
+
+        var store = new StateStore(statePath);
+        await store.SaveAsync(state);
+        var loaded = await store.LoadAsync();
+
+        Assert.IsFalse(loaded.PendingWindowsNotificationHistoryClear);
+        CollectionAssert.AreEqual(
+            new[] { detachedAccountId },
+            loaded.PendingWindowsNotificationAccountCleanupIds);
+    }
+
+    [TestMethod]
+    public async Task Load_VersionThreeCreatesDurableNotificationCleanupIntent()
+    {
+        using var temporary = new TemporaryDirectory();
+        var accountId = Guid.NewGuid();
+        var statePath = temporary.CreateFile(
+            "state.json",
+            $$"""
+            {
+              "schemaVersion": 3,
+              "accounts": [
+                {
+                  "id": "{{accountId}}",
+                  "displayName": "Pending",
+                  "steamLoginName": "pending_login",
+                  "accentHex": "#66C0F4"
+                }
+              ],
+              "settings": {
+                "enableWindowsNotifications": true,
+                "showNotificationPreviews": true
+              },
+              "pendingBrowserProfileDeletionIds": ["{{accountId}}"]
+            }
+            """);
+
+        var loaded = await new StateStore(statePath).LoadAsync();
+
+        Assert.AreEqual(PersistedState.CurrentSchemaVersion, loaded.SchemaVersion);
+        CollectionAssert.AreEqual(
+            new[] { accountId },
+            loaded.PendingWindowsNotificationAccountCleanupIds);
+    }
+
+    [TestMethod]
+    public async Task Save_RejectsUnboundedWindowsNotificationCleanupRequests()
+    {
+        using var temporary = new TemporaryDirectory();
+        var state = new PersistedState
+        {
+            PendingWindowsNotificationAccountCleanupIds = Enumerable.Range(
+                    0,
+                    AccountValidator.MaximumAccountProfiles + 1)
+                .Select(_ => Guid.NewGuid())
+                .ToList()
+        };
+
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(
+            () => new StateStore(
+                    System.IO.Path.Combine(temporary.Path, "state.json"))
+                .SaveAsync(state));
+    }
+
+    [TestMethod]
     public async Task Load_RejectsCleanupTombstoneWithoutMatchingAccount()
     {
         using var temporary = new TemporaryDirectory();

@@ -79,7 +79,7 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task RenameAccount_UpdatesAndPersistsOnlyTheFriendlyLabel()
+    public async Task RenameAccount_UpdatesAndPersistsOnlyTheProfileNickname()
     {
         using var temporary = new TemporaryDirectory();
         var statePath = System.IO.Path.Combine(temporary.Path, "state.json");
@@ -98,9 +98,12 @@ public sealed class MainViewModelTests
         var persisted = await store.LoadAsync();
 
         Assert.AreEqual("New label", account.DisplayName);
+        Assert.AreEqual("New label", viewModel.SelectedProfileDisplayName);
         Assert.AreEqual("New label", persisted.Accounts.Single().DisplayName);
         Assert.AreEqual("stable_login", persisted.Accounts.Single().SteamLoginName);
-        Assert.AreEqual("New label (@stable_login)", account.PlayAccountLabel);
+        Assert.AreEqual(
+            "New label — Steam login: stable_login",
+            account.LaunchIdentityLabel);
         StringAssert.Contains(account.StatusText, "Steam");
     }
 
@@ -128,6 +131,65 @@ public sealed class MainViewModelTests
             () => viewModel.RenameAccountAsync(account, "Must roll back"));
 
         Assert.AreEqual("Keep this label", account.DisplayName);
+    }
+
+    [TestMethod]
+    public async Task RelinkSteamLogin_UpdatesPersistenceAndNotificationIdentity()
+    {
+        using var temporary = new TemporaryDirectory();
+        var statePath = System.IO.Path.Combine(temporary.Path, "state.json");
+        var store = new StateStore(statePath);
+        var viewModel = new MainViewModel(
+            store,
+            new SteamInstallationService(),
+            new SteamLibraryService());
+        var account = await viewModel.AddAccountAsync(new AccountProfile
+        {
+            DisplayName = "Main profile",
+            SteamLoginName = "wrong_login"
+        });
+        var notification = viewModel.AddNotification(
+            account,
+            new ChatNotificationPayload(
+                "Alice",
+                "hello",
+                DateTimeOffset.UtcNow));
+
+        await viewModel.RelinkSteamLoginAsync(account, "correct_login");
+        var persisted = await store.LoadAsync();
+
+        Assert.AreEqual("correct_login", account.SteamLoginName);
+        Assert.AreEqual(
+            "correct_login",
+            viewModel.SelectedProfileSteamLoginName);
+        Assert.AreEqual("correct_login", persisted.Accounts.Single().SteamLoginName);
+        Assert.AreEqual("correct_login", notification.AccountLoginName);
+        Assert.AreEqual("Main profile", account.DisplayName);
+    }
+
+    [TestMethod]
+    public async Task RelinkSteamLogin_RejectsLoginLinkedToAnotherProfile()
+    {
+        using var temporary = new TemporaryDirectory();
+        var viewModel = new MainViewModel(
+            new StateStore(System.IO.Path.Combine(temporary.Path, "state.json")),
+            new SteamInstallationService(),
+            new SteamLibraryService());
+        var first = await viewModel.AddAccountAsync(new AccountProfile
+        {
+            DisplayName = "First",
+            SteamLoginName = "first_login"
+        });
+        _ = await viewModel.AddAccountAsync(new AccountProfile
+        {
+            DisplayName = "Second",
+            SteamLoginName = "second_login"
+        });
+
+        await Assert.ThrowsExactlyAsync<ArgumentException>(
+            () => viewModel.RelinkSteamLoginAsync(first, "second_login"));
+
+        Assert.AreEqual("first_login", first.SteamLoginName);
     }
 
     [TestMethod]
@@ -184,6 +246,30 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task LaunchCheck_DisablesAndRestoresEveryLibraryLaunchAction()
+    {
+        using var temporary = new TemporaryDirectory();
+        var viewModel = new MainViewModel(
+            new StateStore(System.IO.Path.Combine(temporary.Path, "state.json")),
+            new SteamInstallationService(),
+            new SteamLibraryService());
+        _ = await viewModel.AddAccountAsync(new AccountProfile
+        {
+            DisplayName = "Launch profile",
+            SteamLoginName = "launch_profile"
+        });
+
+        Assert.IsTrue(viewModel.CanLaunchGames);
+        Assert.IsTrue(viewModel.TryBeginLaunchCheck());
+        Assert.IsFalse(viewModel.CanLaunchGames);
+        Assert.IsFalse(viewModel.TryBeginLaunchCheck());
+
+        viewModel.EndLaunchCheck();
+
+        Assert.IsTrue(viewModel.CanLaunchGames);
+    }
+
+    [TestMethod]
     public async Task RemovingThePlayAccount_RequiresAnExplicitNewChoice()
     {
         using var temporary = new TemporaryDirectory();
@@ -207,7 +293,9 @@ public sealed class MainViewModelTests
         await viewModel.RemoveAccountAsync(first);
 
         Assert.IsNull(viewModel.SelectedPlayAccount);
-        Assert.AreEqual("Choose an account for game launches", viewModel.SelectedPlayAccountStatus);
+        Assert.AreEqual(
+            "Choose the Steam account required for launches",
+            viewModel.SelectedPlayAccountStatus);
 
         await WpfTestHost.RunAsync(async () =>
         {
@@ -219,7 +307,7 @@ public sealed class MainViewModelTests
 
             Assert.IsNull(restarted.SelectedPlayAccount);
             Assert.AreEqual(
-                "Choose an account for game launches",
+                "Choose the Steam account required for launches",
                 restarted.SelectedPlayAccountStatus);
         });
     }
@@ -535,11 +623,159 @@ public sealed class MainViewModelTests
         CollectionAssert.AreEqual(
             new[] { account.Id },
             pending.PendingBrowserProfileDeletionIds);
+        CollectionAssert.AreEqual(
+            new[] { account.Id },
+            pending.PendingWindowsNotificationAccountCleanupIds);
         Assert.IsTrue(viewModel.IsAccountDeletionPending(account.Id));
 
         await viewModel.RemoveAccountAsync(account);
         var completed = await store.LoadAsync();
         Assert.IsEmpty(completed.Accounts);
         Assert.IsEmpty(completed.PendingBrowserProfileDeletionIds);
+        CollectionAssert.AreEqual(
+            new[] { account.Id },
+            completed.PendingWindowsNotificationAccountCleanupIds);
+
+        var cleanupRequestId = Assert.IsInstanceOfType<Guid>(
+            viewModel.PendingWindowsNotificationCleanupRequestId);
+        await viewModel.CompleteWindowsNotificationCleanupAsync(
+            removedAll: false,
+            [account.Id],
+            cleanupRequestId);
+        var cleaned = await store.LoadAsync();
+        Assert.IsEmpty(cleaned.PendingWindowsNotificationAccountCleanupIds);
+    }
+
+    [TestMethod]
+    public async Task GlobalWindowsCleanupIntentPersistsUntilConfirmed()
+    {
+        using var temporary = new TemporaryDirectory();
+        var statePath = System.IO.Path.Combine(temporary.Path, "state.json");
+        var store = new StateStore(statePath);
+        var viewModel = new MainViewModel(
+            store,
+            new SteamInstallationService(),
+            new SteamLibraryService());
+
+        Assert.IsTrue(viewModel.MarkWindowsNotificationCleanupPending(null));
+        await viewModel.SaveAsync();
+        var pending = await store.LoadAsync();
+        Assert.IsTrue(pending.PendingWindowsNotificationHistoryClear);
+
+        var cleanupRequestId = Assert.IsInstanceOfType<Guid>(
+            viewModel.PendingWindowsNotificationCleanupRequestId);
+        await viewModel.CompleteWindowsNotificationCleanupAsync(
+            removedAll: true,
+            [],
+            cleanupRequestId);
+        var completed = await store.LoadAsync();
+        Assert.IsFalse(completed.PendingWindowsNotificationHistoryClear);
+    }
+
+    [TestMethod]
+    public async Task FailedWindowsCleanupConfirmationKeepsDurableRetryIntent()
+    {
+        using var temporary = new TemporaryDirectory();
+        var statePath = System.IO.Path.Combine(temporary.Path, "state.json");
+        var viewModel = new MainViewModel(
+            new StateStore(statePath),
+            new SteamInstallationService(),
+            new SteamLibraryService());
+        _ = viewModel.MarkWindowsNotificationCleanupPending(null);
+        await viewModel.SaveAsync();
+
+        await using var lockStream = new FileStream(
+            statePath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
+        await Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(
+            () => viewModel.CompleteWindowsNotificationCleanupAsync(
+                removedAll: true,
+                [],
+                Assert.IsInstanceOfType<Guid>(
+                    viewModel.PendingWindowsNotificationCleanupRequestId)));
+
+        Assert.IsTrue(viewModel.HasPendingWindowsNotificationHistoryClear);
+    }
+
+    [TestMethod]
+    public void NotificationCleanupRequestsEscalateToBoundedGlobalClear()
+    {
+        using var temporary = new TemporaryDirectory();
+        var viewModel = new MainViewModel(
+            new StateStore(System.IO.Path.Combine(temporary.Path, "state.json")),
+            new SteamInstallationService(),
+            new SteamLibraryService());
+        for (var index = 0; index < AccountValidator.MaximumAccountProfiles; index++)
+        {
+            Assert.IsTrue(
+                viewModel.MarkWindowsNotificationCleanupPending(Guid.NewGuid()));
+        }
+
+        Assert.IsTrue(
+            viewModel.MarkWindowsNotificationCleanupPending(Guid.NewGuid()));
+
+        Assert.IsTrue(viewModel.HasPendingWindowsNotificationHistoryClear);
+        Assert.IsEmpty(viewModel.AccountsPendingWindowsNotificationCleanup);
+    }
+
+    [TestMethod]
+    public async Task StaleCleanupConfirmationCannotClearNewerPrivacyRequest()
+    {
+        using var temporary = new TemporaryDirectory();
+        var viewModel = new MainViewModel(
+            new StateStore(System.IO.Path.Combine(temporary.Path, "state.json")),
+            new SteamInstallationService(),
+            new SteamLibraryService());
+        _ = viewModel.MarkWindowsNotificationCleanupPending(null);
+        var staleRequestId = Assert.IsInstanceOfType<Guid>(
+            viewModel.PendingWindowsNotificationCleanupRequestId);
+        _ = viewModel.MarkWindowsNotificationCleanupPending(null);
+        var currentRequestId = Assert.IsInstanceOfType<Guid>(
+            viewModel.PendingWindowsNotificationCleanupRequestId);
+
+        await viewModel.CompleteWindowsNotificationCleanupAsync(
+            removedAll: true,
+            [],
+            staleRequestId);
+
+        Assert.IsTrue(viewModel.HasPendingWindowsNotificationHistoryClear);
+        Assert.AreEqual(
+            currentRequestId,
+            viewModel.PendingWindowsNotificationCleanupRequestId);
+    }
+
+    [TestMethod]
+    public async Task FailedDeletionSaveCannotRollbackNewerPrivacyGeneration()
+    {
+        using var temporary = new TemporaryDirectory();
+        var statePath = System.IO.Path.Combine(temporary.Path, "state.json");
+        var viewModel = new MainViewModel(
+            new StateStore(statePath),
+            new SteamInstallationService(),
+            new SteamLibraryService());
+        var account = await viewModel.AddAccountAsync(new AccountProfile
+        {
+            DisplayName = "Keep pending",
+            SteamLoginName = "keep_pending"
+        });
+        await using var lockStream = new FileStream(
+            statePath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
+
+        var deletion = viewModel.MarkAccountDeletionPendingAsync(account);
+        _ = viewModel.MarkWindowsNotificationCleanupPending(accountId: null);
+        var newerRequestId = Assert.IsInstanceOfType<Guid>(
+            viewModel.PendingWindowsNotificationCleanupRequestId);
+        await Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(
+            () => deletion);
+
+        Assert.IsTrue(viewModel.HasPendingWindowsNotificationHistoryClear);
+        Assert.AreEqual(
+            newerRequestId,
+            viewModel.PendingWindowsNotificationCleanupRequestId);
     }
 }

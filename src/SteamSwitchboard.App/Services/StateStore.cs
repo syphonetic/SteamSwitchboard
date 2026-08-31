@@ -124,10 +124,28 @@ public sealed class StateStore
                 throw new InvalidDataException("The settings file uses an unsupported format.");
             }
 
+            state.Accounts ??= [];
+            state.Settings ??= new AppSettings();
+            state.PendingBrowserProfileDeletionIds ??= [];
+
             if (state.SchemaVersion < 3 && state.LastPlayAccountId is null)
             {
                 state.LastPlayAccountId = state.LastSelectedAccountId
                     ?? state.Accounts.FirstOrDefault()?.Id;
+            }
+
+            if (state.SchemaVersion < 4)
+            {
+                state.PendingWindowsNotificationAccountCleanupIds =
+                    state.PendingBrowserProfileDeletionIds.ToList();
+                state.PendingWindowsNotificationHistoryClear =
+                    !state.Settings.EnableWindowsNotifications
+                    || !state.Settings.ShowNotificationPreviews;
+                if (state.PendingWindowsNotificationHistoryClear
+                    || state.PendingWindowsNotificationAccountCleanupIds.Count > 0)
+                {
+                    state.PendingWindowsNotificationCleanupRequestId = Guid.NewGuid();
+                }
             }
 
             PersistedStateValidator.ValidateAndNormalize(state);

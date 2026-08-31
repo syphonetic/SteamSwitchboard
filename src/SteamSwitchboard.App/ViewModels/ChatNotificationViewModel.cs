@@ -5,6 +5,7 @@ namespace SteamSwitchboard.ViewModels;
 public sealed class ChatNotificationViewModel : ObservableObject
 {
     private string _accountDisplayName;
+    private string _accountLoginName;
     private string _steamTitle;
     private string _preview;
     private DateTimeOffset _receivedUtc;
@@ -26,7 +27,7 @@ public sealed class ChatNotificationViewModel : ObservableObject
     {
         AccountId = accountId;
         _accountDisplayName = accountDisplayName;
-        AccountLoginName = accountLoginName;
+        _accountLoginName = accountLoginName;
         _steamTitle = steamTitle;
         _preview = preview;
         _receivedUtc = receivedUtc;
@@ -41,7 +42,7 @@ public sealed class ChatNotificationViewModel : ObservableObject
 
     public string AccountDisplayName => _accountDisplayName;
 
-    public string AccountLoginName { get; }
+    public string AccountLoginName => _accountLoginName;
 
     public string SteamTitle => _steamTitle;
 
@@ -60,7 +61,7 @@ public sealed class ChatNotificationViewModel : ObservableObject
     }
 
     public string Heading =>
-        $"{AccountDisplayName} (@{AccountLoginName})  •  {SteamTitle}";
+        $"{AccountDisplayName} — Steam login: {AccountLoginName}  •  {SteamTitle}";
 
     public string ReceivedTime => ReceivedUtc
         .ToLocalTime()
@@ -70,6 +71,15 @@ public sealed class ChatNotificationViewModel : ObservableObject
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
         if (SetProperty(ref _accountDisplayName, displayName, nameof(AccountDisplayName)))
+        {
+            OnPropertyChanged(nameof(Heading));
+        }
+    }
+
+    public void UpdateAccountLoginName(string loginName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(loginName);
+        if (SetProperty(ref _accountLoginName, loginName, nameof(AccountLoginName)))
         {
             OnPropertyChanged(nameof(Heading));
         }

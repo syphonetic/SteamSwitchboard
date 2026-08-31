@@ -2,15 +2,21 @@
 
 This repository's `Verify` workflow is the release gate. It runs on every pull request and push, including version-tag pushes. The workflow has read-only repository permission and does not publish a GitHub Release.
 
-For every pull request and push, the Windows job:
+For every pull request and push, the dedicated Ubuntu scanner job runs pinned Semgrep and Trivy first. After that job succeeds, the Windows job:
 
 1. Restores NuGet packages in locked mode.
 2. Builds and tests in `Release` with warnings treated as errors.
-3. Runs pinned Semgrep and Trivy jobs that fail on source-security findings, High/Critical dependency vulnerabilities, detected secrets, or recognised configuration problems.
-4. Runs `scripts/security-audit.ps1`, including the repository's transitive NuGet vulnerability audit and the complete build/test gate.
-5. Runs `scripts/package.ps1`, which publishes a self-contained Windows x64 package and runs the normal and adversarial package validators. The Windows package job waits for the dedicated scanner job to pass.
+3. Runs `scripts/security-audit.ps1`, including the repository's transitive NuGet vulnerability audit and the complete build/test gate.
+4. Runs `scripts/package.ps1`, which publishes a self-contained Windows x64 package and runs the normal and adversarial package validators.
 
 For a tag named `vMAJOR.MINOR.PATCH` (or a prerelease form such as `v1.2.3-beta.1`), the workflow also checks that the tag exactly matches the `<Version>` in `src/SteamSwitchboard.App/SteamSwitchboard.App.csproj`. It then uploads the validated ZIP and SHA-256 checksum as a workflow artifact retained for 30 days.
+
+GitHub's hosted Windows runner has no normal interactive desktop, Steam session, or notification surface. CI compiles the real-window harness and runs all deterministic tests, scanners, and package checks, but the composed WebView/window check and the actual Windows-alert check remain local release acceptance steps:
+
+```powershell
+./scripts/test-ui-regression.ps1
+dotnet run --project tests/SteamSwitchboard.UiRegression -c Release -- --notification-smoke
+```
 
 ## First push to GitHub
 
