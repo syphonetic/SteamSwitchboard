@@ -91,6 +91,22 @@ function New-DeterministicArchive {
 
 & (Join-Path $PSScriptRoot 'verify.ps1') -Configuration $Configuration
 
+$sourceRevisionOutput = @(& git -C $projectRoot rev-parse --verify HEAD)
+if ($LASTEXITCODE -ne 0 -or $sourceRevisionOutput.Count -ne 1) {
+    throw 'Packaging requires a Git checkout with one valid HEAD revision.'
+}
+$sourceRevision = $sourceRevisionOutput[0].Trim()
+if ($sourceRevision -notmatch '^(?:[0-9A-Fa-f]{40}|[0-9A-Fa-f]{64})$') {
+    throw 'Packaging requires a complete Git HEAD object ID.'
+}
+$worktreeChanges = @(& git -C $projectRoot status --porcelain=v1 --untracked-files=all)
+if ($LASTEXITCODE -ne 0) {
+    throw 'Packaging could not verify the Git worktree state.'
+}
+if ($worktreeChanges.Count -ne 0) {
+    throw 'Release packaging requires a clean Git worktree. Commit or remove every non-ignored change first.'
+}
+
 [System.IO.Directory]::CreateDirectory($releaseRoot) | Out-Null
 $lockPath = Join-Path $releaseRoot '.package.lock'
 $lockStream = $null
@@ -134,6 +150,96 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet publish exited with code $LASTEXITCODE."
     }
+
+    $assetsFile = Join-Path $projectRoot (
+        'src\SteamSwitchboard.App\obj\project.assets.json')
+    $assets = Get-Content -LiteralPath $assetsFile -Raw | ConvertFrom-Json
+    $packageRoots = @($assets.packageFolders.PSObject.Properties.Name)
+    if ($packageRoots.Count -eq 0) {
+        throw 'The restored NuGet package roots could not be identified.'
+    }
+
+    function Copy-NuGetPackageDocument {
+        param(
+            [Parameter(Mandatory)][string]$PackageId,
+            [Parameter(Mandatory)][string]$PackageFile,
+            [Parameter(Mandatory)][string]$Destination
+        )
+
+        $libraryNames = @(
+            $assets.libraries.PSObject.Properties.Name |
+                Where-Object {
+                    $_.StartsWith(
+                        "$PackageId/",
+                        [System.StringComparison]::OrdinalIgnoreCase)
+                })
+        if ($libraryNames.Count -ne 1) {
+            throw "Expected exactly one restored version of $PackageId."
+        }
+
+        $version = ($libraryNames[0] -split '/', 2)[1]
+        $documentCandidates = @(
+            foreach ($packageRoot in $packageRoots) {
+                $candidate = Join-Path $packageRoot (
+                    "$($PackageId.ToLowerInvariant())\$version\$PackageFile")
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                    (Resolve-Path -LiteralPath $candidate).Path
+                }
+            })
+        if ($documentCandidates.Count -ne 1) {
+            throw "Expected exactly one restored package document for $PackageId."
+        }
+
+        Copy-Item -LiteralPath $documentCandidates[0] -Destination $Destination
+    }
+
+    $thirdPartyLicenses = Join-Path $publishDirectory 'THIRD-PARTY-LICENSES'
+    [System.IO.Directory]::CreateDirectory($thirdPartyLicenses) | Out-Null
+    $dotnetRoot = Split-Path -Parent (Get-Command dotnet -ErrorAction Stop).Source
+    Copy-Item -LiteralPath (Join-Path $dotnetRoot 'LICENSE.txt') `
+        -Destination (Join-Path $thirdPartyLicenses 'DOTNET-LICENSE.txt')
+    Copy-Item -LiteralPath (Join-Path $dotnetRoot 'ThirdPartyNotices.txt') `
+        -Destination (Join-Path $thirdPartyLicenses 'DOTNET-THIRD-PARTY-NOTICES.txt')
+    Copy-NuGetPackageDocument `
+        -PackageId 'Microsoft.Web.WebView2' `
+        -PackageFile 'LICENSE.txt' `
+        -Destination (Join-Path $thirdPartyLicenses 'MICROSOFT-WEBVIEW2-LICENSE.txt')
+    Copy-NuGetPackageDocument `
+        -PackageId 'Microsoft.Web.WebView2' `
+        -PackageFile 'NOTICE.txt' `
+        -Destination (Join-Path $thirdPartyLicenses 'MICROSOFT-WEBVIEW2-NOTICE.txt')
+    Copy-NuGetPackageDocument `
+        -PackageId 'Microsoft.WindowsAppSDK.Base' `
+        -PackageFile 'license.txt' `
+        -Destination (Join-Path $thirdPartyLicenses 'MICROSOFT-WINDOWS-APP-SDK-BASE-LICENSE.txt')
+    Copy-NuGetPackageDocument `
+        -PackageId 'Microsoft.WindowsAppSDK.Base' `
+        -PackageFile 'NOTICE.txt' `
+        -Destination (Join-Path $thirdPartyLicenses 'MICROSOFT-WINDOWS-APP-SDK-BASE-NOTICE.txt')
+    Copy-NuGetPackageDocument `
+        -PackageId 'Microsoft.WindowsAppSDK.Foundation' `
+        -PackageFile 'license.txt' `
+        -Destination (Join-Path $thirdPartyLicenses 'MICROSOFT-WINDOWS-APP-SDK-FOUNDATION-LICENSE.txt')
+    Copy-NuGetPackageDocument `
+        -PackageId 'Microsoft.WindowsAppSDK.InteractiveExperiences' `
+        -PackageFile 'license.txt' `
+        -Destination (Join-Path $thirdPartyLicenses 'MICROSOFT-WINDOWS-APP-SDK-INTERACTIVE-EXPERIENCES-LICENSE.txt')
+    Copy-NuGetPackageDocument `
+        -PackageId 'Microsoft.WindowsAppSDK.Runtime' `
+        -PackageFile 'license.txt' `
+        -Destination (Join-Path $thirdPartyLicenses 'MICROSOFT-WINDOWS-APP-SDK-RUNTIME-LICENSE.txt')
+    Copy-NuGetPackageDocument `
+        -PackageId 'Microsoft.WindowsAppSDK.Runtime' `
+        -PackageFile 'NOTICE.txt' `
+        -Destination (Join-Path $thirdPartyLicenses 'MICROSOFT-WINDOWS-APP-SDK-RUNTIME-NOTICE.txt')
+    Copy-NuGetPackageDocument `
+        -PackageId 'Microsoft.Windows.SDK.BuildTools.MSIX' `
+        -PackageFile 'sdk_license.txt' `
+        -Destination (Join-Path $thirdPartyLicenses 'MICROSOFT-WINDOWS-SDK-LICENSE.txt')
+    Copy-NuGetPackageDocument `
+        -PackageId 'Microsoft.Windows.SDK.BuildTools.MSIX' `
+        -PackageFile 'NOTICE.txt' `
+        -Destination (Join-Path $thirdPartyLicenses 'MICROSOFT-WINDOWS-SDK-NOTICE.txt')
 
     foreach ($document in @(
         'README.md',
@@ -181,6 +287,7 @@ try {
         ArchivePath = $temporaryArchive
         ChecksumPath = $temporaryChecksum
         ExpectedVersion = $version
+        ExpectedSourceRevision = $sourceRevision
         RequireSignature = $RequireSignature
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedPublisher)) {
@@ -190,7 +297,20 @@ try {
     & (Join-Path $PSScriptRoot 'test-package-validator.ps1') `
         -ArchivePath $temporaryArchive `
         -ChecksumPath $temporaryChecksum `
-        -ExpectedVersion $version
+        -ExpectedVersion $version `
+        -ExpectedSourceRevision $sourceRevision
+
+    $finalSourceRevisionOutput = @(& git -C $projectRoot rev-parse --verify HEAD)
+    if ($LASTEXITCODE -ne 0 `
+        -or $finalSourceRevisionOutput.Count -ne 1 `
+        -or $finalSourceRevisionOutput[0].Trim() -cne $sourceRevision) {
+        throw 'The Git HEAD revision changed while the release package was being built.'
+    }
+    $finalWorktreeChanges = @(
+        & git -C $projectRoot status --porcelain=v1 --untracked-files=all)
+    if ($LASTEXITCODE -ne 0 -or $finalWorktreeChanges.Count -ne 0) {
+        throw 'The Git worktree changed while the release package was being built.'
+    }
 
     Move-FileReplacing -SourcePath $temporaryArchive -DestinationPath $archivePath
     Move-FileReplacing -SourcePath $temporaryChecksum -DestinationPath $checksumPath

@@ -7,6 +7,8 @@ param(
 
     [string]$ExpectedVersion,
 
+    [string]$ExpectedSourceRevision,
+
     [string]$ExpectedPublisher,
 
     [switch]$RequireSignature
@@ -27,6 +29,18 @@ if ([string]::IsNullOrWhiteSpace($ExpectedVersion)) {
 }
 if ($ExpectedVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
     throw 'The expected package version is invalid.'
+}
+
+if ([string]::IsNullOrWhiteSpace($ExpectedSourceRevision)) {
+    $sourceRevisionOutput = @(& git -C $projectRoot rev-parse --verify HEAD)
+    if ($LASTEXITCODE -ne 0 -or $sourceRevisionOutput.Count -ne 1) {
+        throw 'The expected source revision is missing and could not be read from Git.'
+    }
+
+    $ExpectedSourceRevision = $sourceRevisionOutput[0].Trim()
+}
+if ($ExpectedSourceRevision -notmatch '^(?:[0-9A-Fa-f]{40}|[0-9A-Fa-f]{64})$') {
+    throw 'The expected source revision must be a complete Git object ID.'
 }
 
 function Assert-SafeLocalFile {
@@ -103,6 +117,18 @@ $expectedEntries = @(
     "$expectedRootName/SECURITY.md",
     "$expectedRootName/CHANGELOG.md",
     "$expectedRootName/CONTRIBUTING.md",
+    "$expectedRootName/THIRD-PARTY-LICENSES/DOTNET-LICENSE.txt",
+    "$expectedRootName/THIRD-PARTY-LICENSES/DOTNET-THIRD-PARTY-NOTICES.txt",
+    "$expectedRootName/THIRD-PARTY-LICENSES/MICROSOFT-WEBVIEW2-LICENSE.txt",
+    "$expectedRootName/THIRD-PARTY-LICENSES/MICROSOFT-WEBVIEW2-NOTICE.txt",
+    "$expectedRootName/THIRD-PARTY-LICENSES/MICROSOFT-WINDOWS-APP-SDK-BASE-LICENSE.txt",
+    "$expectedRootName/THIRD-PARTY-LICENSES/MICROSOFT-WINDOWS-APP-SDK-BASE-NOTICE.txt",
+    "$expectedRootName/THIRD-PARTY-LICENSES/MICROSOFT-WINDOWS-APP-SDK-FOUNDATION-LICENSE.txt",
+    "$expectedRootName/THIRD-PARTY-LICENSES/MICROSOFT-WINDOWS-APP-SDK-INTERACTIVE-EXPERIENCES-LICENSE.txt",
+    "$expectedRootName/THIRD-PARTY-LICENSES/MICROSOFT-WINDOWS-APP-SDK-RUNTIME-LICENSE.txt",
+    "$expectedRootName/THIRD-PARTY-LICENSES/MICROSOFT-WINDOWS-APP-SDK-RUNTIME-NOTICE.txt",
+    "$expectedRootName/THIRD-PARTY-LICENSES/MICROSOFT-WINDOWS-SDK-LICENSE.txt",
+    "$expectedRootName/THIRD-PARTY-LICENSES/MICROSOFT-WINDOWS-SDK-NOTICE.txt",
     "$expectedRootName/docs/ARCHITECTURE.md",
     "$expectedRootName/docs/GITHUB_RELEASE.md",
     "$expectedRootName/docs/PRIVACY.md",
@@ -274,8 +300,17 @@ try {
     if ([string]::IsNullOrWhiteSpace($version) `
         -or -not (Test-ReleaseProductVersion `
             -ProductVersion $version `
-            -ExpectedVersion $ExpectedVersion)) {
-        throw "The packaged version '$version' does not match '$ExpectedVersion'."
+            -ExpectedVersion $ExpectedVersion `
+            -ExpectedSourceRevision $ExpectedSourceRevision)) {
+        throw "The packaged version '$version' does not match version '$ExpectedVersion' from source '$ExpectedSourceRevision'."
+    }
+    $applicationVersion = (Get-Item -LiteralPath $applicationDll).VersionInfo.ProductVersion
+    if ([string]::IsNullOrWhiteSpace($applicationVersion) `
+        -or -not (Test-ReleaseProductVersion `
+            -ProductVersion $applicationVersion `
+            -ExpectedVersion $ExpectedVersion `
+            -ExpectedSourceRevision $ExpectedSourceRevision)) {
+        throw "The packaged application DLL version '$applicationVersion' does not match version '$ExpectedVersion' from source '$ExpectedSourceRevision'."
     }
 
     $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($executable)
@@ -315,6 +350,8 @@ try {
         EntryCount = $entryCount
         Sha256 = $actualHash
         ExecutableVersion = $version
+        ApplicationDllVersion = $applicationVersion
+        SourceRevision = $ExpectedSourceRevision.ToLowerInvariant()
         EmbeddedIcon = $iconSize
         NotificationLogo = $notificationLogoSize
         SignatureStatus = [string]$signature.Status

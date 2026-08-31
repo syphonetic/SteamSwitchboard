@@ -296,7 +296,11 @@ internal static class Program
 
                 notificationValidationBusy = true;
                 Console.WriteLine($"Notification path: {status.Text}");
-                await window.ClearWindowsNotificationsForValidationAsync();
+                if (!await window.ClearWindowsNotificationsForValidationAsync())
+                {
+                    throw new InvalidOperationException(
+                        "Windows did not confirm removal of the isolated test-alert group.");
+                }
                 notificationTestValidated = true;
                 notificationTimer.Stop();
                 var chats = (WpfButton?)window.FindName("ChatsNavButton")
@@ -436,10 +440,38 @@ internal static class Program
                 "The current Chats page state was not updated for UI Automation.");
         }
 
+        window.UpdateLayout();
+        if (!window.IsVisible || window.WindowState != WindowState.Normal)
+        {
+            throw new InvalidOperationException(
+                $"The main window is not visibly usable (visible={window.IsVisible}, state={window.WindowState}).");
+        }
+
+        var source = PresentationSource.FromVisual(window)
+            ?? throw new InvalidOperationException("The main window is not rendered.");
+        var transform = source.CompositionTarget?.TransformToDevice
+            ?? System.Windows.Media.Matrix.Identity;
         var handle = new WindowInteropHelper(window).Handle;
         if (!GetWindowRect(handle, out var bounds))
         {
             throw new InvalidOperationException("The window bounds could not be read.");
+        }
+
+        var nativeWidth = bounds.Right - bounds.Left;
+        var nativeHeight = bounds.Bottom - bounds.Top;
+        var expectedWidth = (int)Math.Floor(window.ActualWidth * transform.M11);
+        var expectedHeight = (int)Math.Floor(window.ActualHeight * transform.M22);
+        const int nativeSizingTolerance = 32;
+        if (window.ActualWidth + 1 < window.MinWidth
+            || window.ActualHeight + 1 < window.MinHeight
+            || nativeWidth + nativeSizingTolerance < expectedWidth
+            || nativeHeight + nativeSizingTolerance < expectedHeight)
+        {
+            throw new InvalidOperationException(
+                "The main window rendered at an unusable size. "
+                + $"WPF={window.ActualWidth:F0}x{window.ActualHeight:F0} DIPs, "
+                + $"native={nativeWidth}x{nativeHeight} pixels, "
+                + $"expected approximately {expectedWidth}x{expectedHeight} pixels.");
         }
 
         var workArea = System.Windows.Forms.Screen.FromHandle(handle).WorkingArea;

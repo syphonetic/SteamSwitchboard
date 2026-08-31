@@ -186,16 +186,20 @@ public sealed class WindowsAppNotificationService : IDisposable
                             liveNotificationId.ToString("N"));
                     }
 
-                    builder.SetGroup(GetAccountGroup(id));
-                    if (!string.IsNullOrWhiteSpace(replacementTag))
-                    {
-                        builder.SetTag(CreateReplacementTag(id, replacementTag));
-                    }
                 }
-                else if (isTest && !string.IsNullOrWhiteSpace(replacementTag))
+
+                var notificationGroup = GetNotificationGroup(accountId, isTest);
+                if (notificationGroup is not null)
                 {
-                    builder.SetGroup(TestNotificationGroup);
-                    builder.SetTag(CreateReplacementTag(Guid.Empty, replacementTag));
+                    builder.SetGroup(notificationGroup);
+                }
+
+                if (!string.IsNullOrWhiteSpace(replacementTag)
+                    && (accountId is Guid || isTest))
+                {
+                    builder.SetTag(CreateReplacementTag(
+                        isTest ? Guid.Empty : accountId!.Value,
+                        replacementTag));
                 }
 
                 var notification = builder.BuildNotification();
@@ -223,6 +227,28 @@ public sealed class WindowsAppNotificationService : IDisposable
             removeAll: accountId is null,
             accountId is Guid id ? [id] : []);
     }
+
+    internal bool RemoveTestNotifications()
+    {
+        lock (_gate)
+        {
+            if (_disposed
+                || !TryRegisterCore()
+                || _manager is null)
+            {
+                return false;
+            }
+
+            return RemoveGroupCore(TestNotificationGroup);
+        }
+    }
+
+    internal static string? GetNotificationGroup(Guid? accountId, bool isTest) =>
+        isTest
+            ? TestNotificationGroup
+            : accountId is Guid id
+                ? GetAccountGroup(id)
+                : null;
 
     public bool RemoveMany(
         bool removeAll,
@@ -355,7 +381,7 @@ public sealed class WindowsAppNotificationService : IDisposable
     }
 
     private static string GetAccountGroup(Guid accountId) =>
-        accountId.ToString("N")[..16];
+        accountId.ToString("N");
 
     internal static bool TryOpenAppLogo(
         string applicationDirectory,
@@ -530,17 +556,35 @@ public sealed class WindowsAppNotificationService : IDisposable
         {
             if (accountId is Guid id)
             {
-                _manager.RemoveByGroupAsync(GetAccountGroup(id))
-                    .GetAwaiter()
-                    .GetResult();
-            }
-            else
-            {
-                _manager.RemoveAllAsync()
-                    .GetAwaiter()
-                    .GetResult();
+                return RemoveGroupCore(GetAccountGroup(id));
             }
 
+            _manager.RemoveAllAsync()
+                .GetAwaiter()
+                .GetResult();
+
+            return true;
+        }
+        catch (Exception exception) when (IsRecoverableNotificationFailure(exception))
+        {
+            _statusText =
+                "Windows notification history could not be cleared yet; Switchboard will retry next time.";
+            return false;
+        }
+    }
+
+    private bool RemoveGroupCore(string group)
+    {
+        if (_manager is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            _manager.RemoveByGroupAsync(group)
+                .GetAwaiter()
+                .GetResult();
             return true;
         }
         catch (Exception exception) when (IsRecoverableNotificationFailure(exception))
@@ -649,10 +693,16 @@ internal sealed class OrderedCommandQueue<TTarget> : IDisposable
     private int _disposed;
 
     public OrderedCommandQueue(TTarget target)
+        : this(target, MaximumPendingCommands)
     {
+    }
+
+    internal OrderedCommandQueue(TTarget target, int maximumPendingCommands)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumPendingCommands, 1);
         _target = target;
         _channel = Channel.CreateBounded<Command>(
-            new BoundedChannelOptions(MaximumPendingCommands)
+            new BoundedChannelOptions(maximumPendingCommands)
             {
                 AllowSynchronousContinuations = false,
                 FullMode = BoundedChannelFullMode.Wait,
@@ -666,24 +716,24 @@ internal sealed class OrderedCommandQueue<TTarget> : IDisposable
 
     public async Task<TResult> EnqueueAsync<TResult>(
         Func<TTarget, TResult> action,
+        TResult rejectedResult,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(action);
         ObjectDisposedException.ThrowIf(
             Volatile.Read(ref _disposed) != 0,
             this);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var completion = new TaskCompletionSource<object?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        try
+        if (!_channel.Writer.TryWrite(
+                new Command(target => action(target), completion)))
         {
-            await _channel.Writer.WriteAsync(
-                new Command(target => action(target), completion),
-                cancellationToken);
-        }
-        catch (ChannelClosedException)
-        {
-            throw new ObjectDisposedException(GetType().Name);
+            ObjectDisposedException.ThrowIf(
+                Volatile.Read(ref _disposed) != 0,
+                this);
+            return rejectedResult;
         }
 
         var result = await completion.Task.WaitAsync(cancellationToken);

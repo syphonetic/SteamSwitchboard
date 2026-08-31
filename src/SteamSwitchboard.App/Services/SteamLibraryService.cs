@@ -6,8 +6,35 @@ namespace SteamSwitchboard.Services;
 public sealed class SteamLibraryService
 {
     private const int MaximumLibraries = 256;
-    private const int MaximumManifestsPerLibrary = 100_000;
+    private const int MaximumManifestFiles = 50_000;
+    private const int MaximumInstalledGames = 25_000;
+    private const long MaximumManifestBytes = 512L * 1024 * 1024;
     private const int MaximumGameNameCharacters = 200;
+
+    private readonly int _maximumManifestFiles;
+    private readonly int _maximumInstalledGames;
+    private readonly long _maximumManifestBytes;
+
+    public SteamLibraryService()
+        : this(
+            MaximumManifestFiles,
+            MaximumInstalledGames,
+            MaximumManifestBytes)
+    {
+    }
+
+    internal SteamLibraryService(
+        int maximumManifestFiles,
+        int maximumInstalledGames,
+        long maximumManifestBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumManifestFiles, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumInstalledGames, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumManifestBytes, 1);
+        _maximumManifestFiles = maximumManifestFiles;
+        _maximumInstalledGames = maximumInstalledGames;
+        _maximumManifestBytes = maximumManifestBytes;
+    }
 
     public Task<IReadOnlyList<InstalledGame>> LoadInstalledGamesAsync(
         string steamRoot,
@@ -71,37 +98,67 @@ public sealed class SteamLibraryService
         CancellationToken cancellationToken)
     {
         var games = new Dictionary<uint, InstalledGame>();
+        var inspectedManifestCount = 0;
+        long inspectedManifestBytes = 0;
+        var discoveryBudgetReached = false;
 
         foreach (var library in FindLibraryFolders(steamRoot))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var steamApps = Path.Combine(library, "steamapps");
-            var libraryGames = new List<InstalledGame>();
-            var manifestLimitExceeded = false;
 
             try
             {
-                var manifestCount = 0;
                 foreach (var manifest in Directory.EnumerateFiles(
                              steamApps,
                              "appmanifest_*.acf",
                              SearchOption.TopDirectoryOnly))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    manifestCount++;
-                    if (manifestCount > MaximumManifestsPerLibrary)
+                    if (inspectedManifestCount >= _maximumManifestFiles)
                     {
-                        manifestLimitExceeded = true;
+                        discoveryBudgetReached = true;
                         break;
                     }
 
+                    inspectedManifestCount++;
+                    long manifestBytes;
+                    try
+                    {
+                        manifestBytes = new FileInfo(manifest).Length;
+                    }
+                    catch (Exception exception) when (
+                        exception is IOException
+                            or UnauthorizedAccessException
+                            or System.Security.SecurityException)
+                    {
+                        continue;
+                    }
+
+                    if (manifestBytes is < 0 or > VdfParser.MaximumFileBytes)
+                    {
+                        continue;
+                    }
+
+                    if (manifestBytes > _maximumManifestBytes - inspectedManifestBytes)
+                    {
+                        discoveryBudgetReached = true;
+                        break;
+                    }
+
+                    inspectedManifestBytes += manifestBytes;
                     var game = TryReadManifest(
                         manifest,
                         library,
                         cancellationToken);
                     if (game is not null)
                     {
-                        libraryGames.Add(game);
+                        games[game.AppId] = game;
+                        if (games.Count >= _maximumInstalledGames)
+                        {
+                            discoveryBudgetReached = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -113,14 +170,9 @@ public sealed class SteamLibraryService
                 continue;
             }
 
-            if (manifestLimitExceeded)
+            if (discoveryBudgetReached)
             {
-                continue;
-            }
-
-            foreach (var game in libraryGames)
-            {
-                games[game.AppId] = game;
+                break;
             }
         }
 

@@ -170,7 +170,7 @@ public sealed class WindowsAppNotificationServiceTests
     public void ReplacementTag_IsBoundedOpaqueAndAccountScoped()
     {
         var firstAccount = Guid.Parse("11111111-1111-1111-1111-111111111111");
-        var secondAccount = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var secondAccount = Guid.Parse("11111111-1111-1111-2222-222222222222");
 
         var first = WindowsAppNotificationService.CreateReplacementTag(
             firstAccount,
@@ -186,6 +186,72 @@ public sealed class WindowsAppNotificationServiceTests
         Assert.AreEqual(first, repeated);
         Assert.AreNotEqual(first, otherAccount);
         Assert.IsFalse(first.Contains("sender", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [TestMethod]
+    public void NotificationGroup_IsolatesTestsFromAccountHistory()
+    {
+        var firstAccount = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var secondAccount = Guid.Parse("11111111-1111-1111-2222-222222222222");
+
+        var firstAccountGroup = WindowsAppNotificationService.GetNotificationGroup(
+            firstAccount,
+            isTest: false);
+        var secondAccountGroup = WindowsAppNotificationService.GetNotificationGroup(
+            secondAccount,
+            isTest: false);
+        var selectedAccountTestGroup = WindowsAppNotificationService.GetNotificationGroup(
+            firstAccount,
+            isTest: true);
+        var accountlessTestGroup = WindowsAppNotificationService.GetNotificationGroup(
+            accountId: null,
+            isTest: true);
+
+        Assert.IsNotNull(firstAccountGroup);
+        Assert.IsNotNull(secondAccountGroup);
+        Assert.AreEqual(32, firstAccountGroup.Length);
+        Assert.AreEqual(32, secondAccountGroup.Length);
+        Assert.AreNotEqual(firstAccountGroup, secondAccountGroup);
+        Assert.AreEqual(selectedAccountTestGroup, accountlessTestGroup);
+        Assert.AreNotEqual(firstAccountGroup, selectedAccountTestGroup);
+        Assert.IsNull(WindowsAppNotificationService.GetNotificationGroup(
+            accountId: null,
+            isTest: false));
+    }
+
+    [TestMethod]
+    public void CompatibilityReplacement_IsolatesTestsFromGenuineAlerts()
+    {
+        var accountId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+
+        Assert.IsTrue(WindowsNotificationDeliveryPolicy.IsSameReplacement(
+            accountId,
+            "sender-tag",
+            existingIsTest: false,
+            accountId,
+            "sender-tag",
+            incomingIsTest: false));
+        Assert.IsFalse(WindowsNotificationDeliveryPolicy.IsSameReplacement(
+            accountId,
+            "settings-test",
+            existingIsTest: false,
+            accountId,
+            "settings-test",
+            incomingIsTest: true));
+        Assert.IsFalse(WindowsNotificationDeliveryPolicy.IsSameReplacement(
+            accountId,
+            "settings-test",
+            existingIsTest: true,
+            accountId,
+            "settings-test",
+            incomingIsTest: false));
+        Assert.IsFalse(WindowsNotificationDeliveryPolicy.IsSameReplacement(
+            accountId,
+            "sender-tag",
+            existingIsTest: false,
+            accountId,
+            incomingReplacementTag: null,
+            incomingIsTest: false));
     }
 
     [TestMethod]
@@ -267,7 +333,8 @@ public sealed class WindowsAppNotificationServiceTests
                 releaseFirst.Wait();
                 values.Add(1);
                 return true;
-            });
+            },
+            rejectedResult: false);
         Assert.IsTrue(firstStarted.Wait(TimeSpan.FromSeconds(5)));
 
         var second = queue.EnqueueAsync(
@@ -275,13 +342,15 @@ public sealed class WindowsAppNotificationServiceTests
             {
                 values.Add(2);
                 return true;
-            });
+            },
+            rejectedResult: false);
         var third = queue.EnqueueAsync(
             values =>
             {
                 values.Add(3);
                 return true;
-            });
+            },
+            rejectedResult: false);
 
         releaseFirst.Set();
         await Task.WhenAll(first, second, third);
@@ -289,6 +358,48 @@ public sealed class WindowsAppNotificationServiceTests
         CollectionAssert.AreEqual(new[] { 1, 2, 3 }, observed);
         queue.Dispose();
         await queue.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [TestMethod]
+    public async Task OrderedCommandQueue_RejectsImmediatelyWhenCapacityIsFull()
+    {
+        var observed = new List<int>();
+        using var firstStarted = new ManualResetEventSlim();
+        using var releaseFirst = new ManualResetEventSlim();
+        using var queue = new OrderedCommandQueue<List<int>>(
+            observed,
+            maximumPendingCommands: 1);
+
+        var first = queue.EnqueueAsync(
+            values =>
+            {
+                firstStarted.Set();
+                releaseFirst.Wait();
+                values.Add(1);
+                return true;
+            },
+            rejectedResult: false);
+        Assert.IsTrue(firstStarted.Wait(TimeSpan.FromSeconds(5)));
+        var second = queue.EnqueueAsync(
+            values =>
+            {
+                values.Add(2);
+                return true;
+            },
+            rejectedResult: false);
+        var rejected = queue.EnqueueAsync(
+            values =>
+            {
+                values.Add(3);
+                return true;
+            },
+            rejectedResult: false);
+
+        Assert.IsFalse(await rejected.WaitAsync(TimeSpan.FromSeconds(1)));
+        releaseFirst.Set();
+        Assert.IsTrue(await first);
+        Assert.IsTrue(await second);
+        CollectionAssert.AreEqual(new[] { 1, 2 }, observed);
     }
 
     [TestMethod]
@@ -305,7 +416,8 @@ public sealed class WindowsAppNotificationServiceTests
                 releaseCommand.Wait();
                 values.Add(1);
                 return true;
-            });
+            },
+            rejectedResult: false);
         Assert.IsTrue(commandStarted.Wait(TimeSpan.FromSeconds(5)));
 
         queue.Dispose();

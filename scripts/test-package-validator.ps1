@@ -7,7 +7,10 @@ param(
     [string]$ChecksumPath,
 
     [Parameter(Mandatory)]
-    [string]$ExpectedVersion
+    [string]$ExpectedVersion,
+
+    [Parameter(Mandatory)]
+    [string]$ExpectedSourceRevision
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,7 +23,8 @@ $validator = Join-Path $PSScriptRoot 'validate-package.ps1'
 $baseline = & $validator `
     -ArchivePath $archive `
     -ChecksumPath $checksum `
-    -ExpectedVersion $ExpectedVersion
+    -ExpectedVersion $ExpectedVersion `
+    -ExpectedSourceRevision $ExpectedSourceRevision
 $packageRootName = $baseline.PackageRootName
 
 $temporaryBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
@@ -64,7 +68,8 @@ function Assert-ValidatorRejects {
         & $validator `
             -ArchivePath $Path `
             -ChecksumPath $Sidecar `
-            -ExpectedVersion $ExpectedVersion | Out-Null
+            -ExpectedVersion $ExpectedVersion `
+            -ExpectedSourceRevision $ExpectedSourceRevision | Out-Null
     }
     catch {
         $rejectionMessage = $_.Exception.Message
@@ -96,6 +101,24 @@ try {
             -ProductVersion '1.0.0-rc.1+build.42' `
             -ExpectedVersion '1.0.0-rc.1')) {
         throw 'The release-version validator rejected prerelease build metadata.'
+    }
+    $testRevision = '0123456789abcdef0123456789abcdef01234567'
+    if (-not (Test-ReleaseProductVersion `
+            -ProductVersion "1.0.0+$testRevision" `
+            -ExpectedVersion '1.0.0' `
+            -ExpectedSourceRevision $testRevision)) {
+        throw 'The release-version validator rejected the exact source revision.'
+    }
+    foreach ($sourceMismatchedVersion in @(
+            '1.0.0',
+            '1.0.0+build.42',
+            '1.0.0+1123456789abcdef0123456789abcdef01234567')) {
+        if (Test-ReleaseProductVersion `
+                -ProductVersion $sourceMismatchedVersion `
+                -ExpectedVersion '1.0.0' `
+                -ExpectedSourceRevision $testRevision) {
+            throw "The release-version validator accepted source-mismatched version '$sourceMismatchedVersion'."
+        }
     }
     foreach ($invalidVersion in @(
             '1.0.01',
@@ -300,6 +323,7 @@ try {
                 -ArchivePath $archive `
                 -ChecksumPath $checksum `
                 -ExpectedVersion $ExpectedVersion `
+                -ExpectedSourceRevision $ExpectedSourceRevision `
                 -RequireSignature | Out-Null
         }
         catch {

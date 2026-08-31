@@ -25,14 +25,14 @@ First GitHub-ready source release and self-contained Windows package.
 - Added a permanent host-owned workspace/login banner without claiming the configured label verifies Steam's signed-in web identity.
 - Added strict VDF/JSON size, depth, token, node, path, identity, duplicate, and unknown-property limits.
 - Rejected remote and reparse-point paths for Steam libraries, manifests, executable discovery, application state, logs, and browser data.
-- Added Authenticode publisher verification for `steam.exe`, exact process-image/session/start-time identity, authoritative SteamID resolution, duplicate-login rejection, temporally separated transition checks, and a final account/executable check while the executable is locked.
+- Added whole-chain revocation-aware Authenticode publisher verification plus expected file metadata/layout checks for `steam.exe`, exact process-image/session/start-time identity, authoritative SteamID resolution, duplicate-login rejection, temporally separated transition checks, and a final account/executable check while the executable is locked.
 - Made account forgetting durable, immediately alert-suppressed and session-quiesced, network-silent during retry, and visibly pending until WebView2 accepts profile deletion.
 - Added single-instance and non-elevated execution guards, bounded privacy-safe diagnostics, transactional state mutations, and stale-refresh suppression.
 
 ### Quality and release
 
-- Added 161 automated tests, a repeatable composed-window WPF/WebView2 regression harness, an opt-in real Windows-alert smoke path, plus Semgrep, Trivy, and transitive dependency auditing.
+- Added 173 automated tests, a repeatable composed-window WPF/WebView2 regression harness, an opt-in isolated real Windows-alert smoke path, plus Semgrep, Trivy, full-history secret scanning, and transitive dependency auditing.
 - Enforced signed NuGet source policy, an isolated clean-cache signer check, lock files, warnings/security diagnostics as build errors, and zero-warning Release builds.
-- Added a read-only GitHub Actions gate with pinned Semgrep and Trivy versions that must pass before Windows compilation, tests, packaging, or tag-artifact upload.
-- Added deterministic ZIP metadata, pre-extraction traversal/link/resource/session-data checks, adversarial package-validator fixtures, and clean-install smoke assertions.
+- Added a read-only GitHub Actions gate with checksum-pinned full-history Gitleaks plus pinned Semgrep and Trivy versions that must pass before Windows compilation, tests, reproducibility comparison, and packaging; unsigned tag builds are deliberately not uploaded.
+- Added clean-source and exact full-revision binding for both first-party binaries, restored third-party license/notice collection, deterministic ZIP metadata, pre-extraction traversal/link/resource/session-data checks, adversarial package-validator fixtures, final source revalidation, and clean-install smoke assertions.
 - Kept icon, validation, and deterministic packaging scripts compatible with built-in Windows PowerShell 5.1 while preserving path-containment and filesystem-link checks.

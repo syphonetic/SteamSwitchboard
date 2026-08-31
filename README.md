@@ -8,7 +8,7 @@ SteamSwitchboard is a privacy-first Windows companion for people who use several
 
 ![SteamSwitchboard account workspace](artifacts/ui-final.png)
 
-> **Initial release:** version 1.0.0 is the first public source release. The included Windows build is unsigned; its checksum detects accidental corruption but does not authenticate the publisher. Sign the first-party binaries and distribute them through an authenticated installer/package before wider public distribution.
+> **Initial release:** version 1.0.0 is the first public source release. Any locally generated Windows build is unsigned; its checksum detects accidental corruption but does not authenticate the publisher. CI deliberately does not upload that candidate. Sign the first-party binaries and distribute them through an authenticated installer/package before public binary distribution.
 
 ## What it solves
 
@@ -102,7 +102,7 @@ To create the self-contained Windows package:
 ./scripts/package.ps1
 ```
 
-The ZIP and SHA-256 checksum are written to `artifacts/release/`. Packaging validates archive paths before extraction, runs adversarial validator fixtures, excludes debug/session data, and normalises ZIP order and timestamps. Pass `-RequireSignature` only in a release environment where first-party binaries have been Authenticode-signed.
+The ZIP and SHA-256 checksum are written to `artifacts/release/`. Packaging requires a clean Git checkout, binds both first-party binaries to the complete source revision, includes the exact restored third-party license/notice texts, validates archive paths before extraction, runs adversarial validator fixtures, excludes debug/session data, and normalises ZIP order and timestamps. It rechecks the source revision and worktree immediately before publishing the result. Pass `-RequireSignature` only in a release environment where first-party binaries have been Authenticode-signed.
 
 ## Project map
 
@@ -111,7 +111,7 @@ The ZIP and SHA-256 checksum are written to `artifacts/release/`. Packaging vali
 - `tests/SteamSwitchboard.UiRegression` — disposable real-window/WebView2 interaction and composed-layer regression harness
 - `docs/ARCHITECTURE.md` — component and trust-boundary design
 - `docs/VALIDATION.md` — automated and live validation evidence
-- `docs/GITHUB_RELEASE.md` — beginner GitHub push, Actions build, scan, artifact, and release steps
+- `docs/GITHUB_RELEASE.md` — beginner GitHub push, Actions build/scan, source-release, and signed-binary requirements
 - `scripts/verify.ps1` — reproducible verification entry point
 - `scripts/package.ps1` — self-contained Windows release packaging
 
@@ -119,6 +119,6 @@ The ZIP and SHA-256 checksum are written to `artifacts/release/`. Packaging vali
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the required local checks and project security boundaries. GitHub pushes and pull requests run the same Windows Release verification gate automatically.
 
-GitHub Actions uses pinned Semgrep and Trivy security jobs before the Windows Release build/test/package gate. See the [GitHub release guide](docs/GITHUB_RELEASE.md) for the exact first-push and v1.0.0 artifact steps.
+GitHub Actions uses checksum-pinned Gitleaks plus pinned Semgrep and Trivy before the Windows Release build/test/package gate, then independently rebuilds the package and requires matching hashes. See the [GitHub release guide](docs/GITHUB_RELEASE.md) for the exact first-push, source-release, and signed-binary steps.
 
 SteamSwitchboard is unofficial and is not affiliated with or endorsed by Valve Corporation. Steam and the Steam logo are trademarks of Valve Corporation.

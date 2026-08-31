@@ -20,7 +20,8 @@ public sealed class NotificationPrivacyGateTests
                 commandStarted.Set();
                 releaseCommand.Wait();
                 return true;
-            });
+            },
+            rejectedResult: false);
         Assert.IsTrue(commandStarted.Wait(TimeSpan.FromSeconds(5)));
         var delivery = queue.EnqueueAsync(
             shown =>
@@ -30,7 +31,8 @@ public sealed class NotificationPrivacyGateTests
                 {
                     shown.Add("sensitive preview");
                     return true;
-                }));
+                }),
+            rejectedResult: false);
 
         gate.Revoke();
         releaseCommand.Set();

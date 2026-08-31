@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -9,9 +10,9 @@ public static class SteamExecutableTrust
     private const uint ErrorSuccess = 0;
     private const uint WindowStateActionIgnore = 0;
     private const uint UserInterfaceNone = 2;
-    private const uint RevocationChecksNone = 0;
+    private const uint RevocationChecksWholeChain = 1;
     private const uint ChoiceFile = 1;
-    private const uint CacheOnlyUrlRetrieval = 0x00001000;
+    private const uint RevocationCheckChainExcludeRoot = 0x00000080;
 
     private static readonly Guid GenericVerifyAction =
         new("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
@@ -24,6 +25,12 @@ public static class SteamExecutableTrust
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (!OperatingSystem.IsWindows() || !File.Exists(path))
+        {
+            return false;
+        }
+
+        if (!HasExpectedSteamMetadata(path)
+            || !HasExpectedInstallationLayout(path))
         {
             return false;
         }
@@ -65,6 +72,75 @@ public static class SteamExecutableTrust
         }
     }
 
+    internal static bool HasExpectedSteamMetadata(
+        string? originalFilename,
+        string? productName,
+        string? companyName) =>
+        string.Equals(
+            originalFilename,
+            "steam.exe",
+            StringComparison.OrdinalIgnoreCase)
+        && string.Equals(
+            productName,
+            "Steam",
+            StringComparison.Ordinal)
+        && companyName is not null
+        && ValvePublisherNames.Contains(companyName);
+
+    internal static bool HasExpectedInstallationLayout(string path)
+    {
+        try
+        {
+            var root = Path.GetDirectoryName(path);
+            if (!LocalPathPolicy.TryNormalizeLocalPath(root, out var normalizedRoot))
+            {
+                return false;
+            }
+
+            return LocalPathPolicy.TryNormalizeLocalPath(
+                    Path.Combine(normalizedRoot, "config"),
+                    out var config)
+                && Directory.Exists(config)
+                && LocalPathPolicy.IsStrictDescendant(config, normalizedRoot)
+                && LocalPathPolicy.TryNormalizeLocalPath(
+                    Path.Combine(normalizedRoot, "steamapps"),
+                    out var steamApps)
+                && Directory.Exists(steamApps)
+                && LocalPathPolicy.IsStrictDescendant(steamApps, normalizedRoot);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or IOException
+                or NotSupportedException
+                or PathTooLongException
+                or System.Security.SecurityException
+                or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasExpectedSteamMetadata(string path)
+    {
+        try
+        {
+            var version = FileVersionInfo.GetVersionInfo(path);
+            return HasExpectedSteamMetadata(
+                version.OriginalFilename,
+                version.ProductName,
+                version.CompanyName);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or FileNotFoundException
+                or IOException
+                or System.Security.SecurityException
+                or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     private static bool HasValidAuthenticodeSignature(string path)
     {
         var fileInfo = new WinTrustFileInfo
@@ -82,11 +158,11 @@ public static class SteamExecutableTrust
             {
                 StructureSize = (uint)Marshal.SizeOf<WinTrustData>(),
                 UserInterfaceChoice = UserInterfaceNone,
-                RevocationChecks = RevocationChecksNone,
+                RevocationChecks = RevocationChecksWholeChain,
                 UnionChoice = ChoiceFile,
                 FileInformation = fileInfoPointer,
                 StateAction = WindowStateActionIgnore,
-                ProviderFlags = CacheOnlyUrlRetrieval
+                ProviderFlags = RevocationCheckChainExcludeRoot
             };
 
             return WinVerifyTrust(

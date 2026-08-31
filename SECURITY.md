@@ -35,7 +35,7 @@ The editable profile nickname is deliberately not presented as verified web iden
 
 ### Native Steam and game launching
 
-- Discovery accepts only absolute paths on local fixed/removable drives, rejects UNC/device paths and reparse points, and requires `steam.exe` to have a valid Windows trust result with Valve as publisher.
+- Discovery accepts only absolute paths on local fixed/removable drives, rejects UNC/device paths and reparse points, requires the expected Steam installation layout and Valve file metadata, and requires `steam.exe` to have a valid Windows trust result with Valve as publisher and whole-chain online revocation checking.
 - A running client counts only when one process's final image path, Windows session, process ID, and start time match the validated executable across every check.
 - Launching requires Steam's `HKCU\Software\Valve\Steam\ActiveProcess\ActiveUser`; stale `MostRecent` cache data is never authoritative.
 - Individual SteamID64 values and account names are validated before matching; duplicate login-name mappings are rejected. Unknown, signed-out, malformed, or mismatched state fails closed.
@@ -46,7 +46,7 @@ The editable profile nickname is deliberately not presented as verified web iden
 ### Files and state
 
 - VDF files have byte, character, token, nesting, and node limits; duplicate keys are rejected and parsing is cancellation-aware.
-- Libraries/manifests must remain beneath validated local Steam paths. Manifest filename/AppID mismatches, path traversal, reserved devices, and linked install folders are rejected.
+- Libraries/manifests must remain beneath validated local Steam paths. Manifest filename/AppID mismatches, path traversal, reserved devices, and linked install folders are rejected. Global manifest-count, installed-game-count, and cumulative-byte budgets apply across all library folders rather than resetting per folder.
 - State JSON has 4 MiB, depth, element-count, 512-profile, and 512 detached-notification-cleanup limits; duplicate and unknown properties are rejected before linear-time semantic validation of non-empty unique profile IDs/logins, safe names, colours, paths, selections, deletion markers, and opaque cleanup generations.
 - Profile-nickname edits, native-login relinks, and required-launch-account selection are persisted transactionally; relinks accept only safe unique logins detected from local Steam metadata, and message/notification-title content is never included in state.
 - State saves use unique same-directory temporary files and replacement. UI account mutations roll back when persistence fails.
@@ -59,13 +59,13 @@ The editable profile nickname is deliberately not presented as verified web iden
 - NuGet sources are cleared and mapped to `nuget.org`; repository signatures, one exact legacy Microsoft author certificate, lock files, transitive vulnerability auditing, and low-severity audit reporting are enforced. A disposable empty-cache restore is part of release validation so cached packages cannot hide signer-policy failures.
 - Release builds use warnings-as-errors and promote .NET security diagnostics to errors.
 - The security script runs the complete test suite, dependency audit, Semgrep rules, Trivy vulnerability/secret/configuration checks, and formatting validation.
-- GitHub Actions installs pinned Semgrep and Trivy versions in a mandatory read-only job; the Windows build/test/package job does not start until that scanner gate succeeds.
-- ZIP construction uses stable ordering/timestamps. Validation requires one exact hash/filename sidecar record, holds the archive read-locked through extraction, and rejects traversal, alternate separators, links, reserved devices, case-colliding names, expansion bombs, debug symbols, logs, state, and browser-profile data before extraction.
+- GitHub Actions verifies a pinned Gitleaks binary checksum, scans complete Git history, and installs pinned Semgrep and Trivy versions in a mandatory read-only job; the Windows build/test/package job does not start until that scanner gate succeeds.
+- ZIP construction requires one clean Git source snapshot, includes the applicable restored third-party license/notice texts, and uses stable ordering/timestamps. Validation requires both first-party product versions to contain the exact complete source revision, requires one exact hash/filename sidecar record, holds the archive read-locked through extraction, and rejects traversal, alternate separators, links, reserved devices, case-colliding names, expansion bombs, debug symbols, logs, state, and browser-profile data before extraction. Packaging rechecks both `HEAD` and worktree cleanliness before replacing the release output.
 - Package validation is tested with malicious checksum-name, traversal, debug-data, duplicate-path, resource-amplification, and unsigned-required fixtures.
 
 ## Known residual risks
 
-- The included 1.0.0 build is unsigned. Its SHA-256 sidecar detects accidental corruption only; an attacker who can replace both files can forge both. Wider public distribution requires trusted, timestamped signatures for first-party binaries plus an authenticated installer/package and trusted delivery channel.
+- Any locally generated 1.0.0 build is unsigned, and CI deliberately does not upload it. Its SHA-256 sidecar detects accidental corruption only; an attacker who can replace both files can forge both. Public binary distribution requires trusted, timestamped signatures for first-party binaries plus an authenticated installer/package and trusted delivery channel.
 - Steam exposes no supported host API in this design for binding a WebView session to the user-entered label. The permanent banner makes that limitation explicit; users must confirm Steam's displayed identity before sending.
 - Native Steam still supports one active desktop account at a time. Switchboard guides and verifies a native account change but does not create concurrent native clients.
 - Modern `AppNotificationManager` delivery in a self-contained unpackaged app depends on Windows' optional App SDK Singleton broker. Switchboard probes support and falls back to a legacy tray alert when unavailable. Windows or Do not disturb can still suppress either path; the in-app notification center remains authoritative and Settings exposes a test alert and Windows settings shortcut.

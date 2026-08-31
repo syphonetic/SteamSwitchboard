@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   security-scanners:
-    name: Semgrep and Trivy security gate
+    name: Source and dependency security gate
     runs-on: ubuntu-24.04
     timeout-minutes: 25
 
@@ -22,7 +22,51 @@ jobs:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Scan complete Git history with checksum-pinned Gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks_8.30.0_linux_x64.tar.gz"
+          scanner_root="$(mktemp -d "$RUNNER_TEMP/SteamSwitchboard-gitleaks.XXXXXX")"
+          trap 'rm -rf -- "$scanner_root" "$archive"' EXIT
+          curl --fail --location --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            'https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz'
+          printf '%s  %s\n' \
+            '79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e' \
+            "$archive" | sha256sum --check --status
+          tar -xzf "$archive" -C "$scanner_root" gitleaks
+
+          canary_root="$scanner_root/canary"
+          mkdir -- "$canary_root"
+          printf '%s\n%s\n%s\n' \
+            '-----BEGIN '"PRIVATE KEY-----" \
+            'VGhpcyBpcyBhIGZha2UgZGV0ZWN0aW9uIGNhbmFyeSwgbm90IGEga2V5Lg==' \
+            '-----END '"PRIVATE KEY-----" > "$canary_root/canary.pem"
+          set +e
+          "$scanner_root/gitleaks" dir \
+            --no-banner \
+            --redact=100 \
+            --exit-code 7 \
+            "$canary_root"
+          canary_status=$?
+          set -e
+          if [[ "$canary_status" -ne 7 ]]; then
+            echo "Gitleaks detection canary failed with exit code $canary_status." >&2
+            exit 1
+          fi
+          rm -rf -- "$canary_root"
+
+          "$scanner_root/gitleaks" git \
+            --no-banner \
+            --redact=100 \
+            --exit-code 1 \
+            --log-opts='--all' \
+            .
 
       - name: Install Python for Semgrep
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
@@ -89,7 +133,6 @@ jobs:
         run: ./scripts/security-audit.ps1 -Configuration Release
 
       - name: Validate version tag
-        id: release_version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
@@ -117,20 +160,23 @@ jobs:
             throw "Release tag version '$tagVersion' does not match project version '$projectVersion'."
           }
 
-          "version=$tagVersion" >> $env:GITHUB_OUTPUT
-
-      - name: Build and validate self-contained Windows package
+      - name: Build, validate, and prove reproducible Windows package
         shell: pwsh
-        run: ./scripts/package.ps1 -Configuration Release -Runtime win-x64
+        run: |
+          ./scripts/package.ps1 -Configuration Release -Runtime win-x64
+          [xml] $project = Get-Content -LiteralPath './src/SteamSwitchboard.App/SteamSwitchboard.App.csproj' -Raw
+          $version = @(
+            $project.Project.PropertyGroup |
+              ForEach-Object { [string]$_.Version } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )[0]
+          $archive = "./artifacts/release/SteamSwitchboard-$version-win-x64.zip"
+          $firstHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
 
-      - name: Upload versioned Windows package
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: SteamSwitchboard-${{ steps.release_version.outputs.version }}-win-x64
-          path: |
-            artifacts/release/SteamSwitchboard-${{ steps.release_version.outputs.version }}-win-x64.zip
-            artifacts/release/SteamSwitchboard-${{ steps.release_version.outputs.version }}-win-x64.zip.sha256
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
+          dotnet clean ./SteamSwitchboard.sln --configuration Release
+          ./scripts/package.ps1 -Configuration Release -Runtime win-x64
+          $secondHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          if ($firstHash -cne $secondHash) {
+            throw "Package reproducibility check failed: $firstHash != $secondHash"
+          }
+          Write-Host "Reproducible package SHA-256: $secondHash"

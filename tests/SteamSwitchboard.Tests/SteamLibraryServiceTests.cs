@@ -42,6 +42,58 @@ public sealed class SteamLibraryServiceTests
     }
 
     [TestMethod]
+    public async Task LoadInstalledGames_AppliesGlobalDiscoveryBudgets()
+    {
+        using var temporary = new TemporaryDirectory();
+        var steamRoot = temporary.CreateDirectory("Steam");
+        var primaryApps = temporary.CreateDirectory("Steam", "steamapps");
+        var secondaryRoot = temporary.CreateDirectory("Library");
+        var secondaryApps = temporary.CreateDirectory("Library", "steamapps");
+        _ = temporary.CreateDirectory("Steam", "steamapps", "common", "PrimaryGame");
+        _ = temporary.CreateDirectory("Library", "steamapps", "common", "SecondGame");
+        File.WriteAllText(
+            System.IO.Path.Combine(primaryApps, "libraryfolders.vdf"),
+            $$"""
+            "libraryfolders"
+            {
+                "0" { "path" "{{EscapeForVdf(steamRoot)}}" }
+                "1" { "path" "{{EscapeForVdf(secondaryRoot)}}" }
+            }
+            """);
+        var firstManifest = System.IO.Path.Combine(
+            primaryApps,
+            "appmanifest_10.acf");
+        var secondManifest = System.IO.Path.Combine(
+            secondaryApps,
+            "appmanifest_20.acf");
+        File.WriteAllText(
+            firstManifest,
+            Manifest(10, "Primary Game", "PrimaryGame", 1));
+        File.WriteAllText(
+            secondManifest,
+            Manifest(20, "Second Game", "SecondGame", 1));
+
+        var countBounded = await new SteamLibraryService(
+            maximumManifestFiles: 1,
+            maximumInstalledGames: 10,
+            maximumManifestBytes: 1_000_000).LoadInstalledGamesAsync(steamRoot);
+        var gameBounded = await new SteamLibraryService(
+            maximumManifestFiles: 10,
+            maximumInstalledGames: 1,
+            maximumManifestBytes: 1_000_000).LoadInstalledGamesAsync(steamRoot);
+        var byteBounded = await new SteamLibraryService(
+            maximumManifestFiles: 10,
+            maximumInstalledGames: 10,
+            maximumManifestBytes: Math.Max(
+                new FileInfo(firstManifest).Length,
+                new FileInfo(secondManifest).Length)).LoadInstalledGamesAsync(steamRoot);
+
+        Assert.HasCount(1, countBounded);
+        Assert.HasCount(1, gameBounded);
+        Assert.HasCount(1, byteBounded);
+    }
+
+    [TestMethod]
     public async Task LoadInstalledGames_SkipsMalformedManifests()
     {
         using var temporary = new TemporaryDirectory();

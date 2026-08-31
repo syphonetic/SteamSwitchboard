@@ -1409,7 +1409,8 @@ public partial class MainWindow : Window
             notification.Preview,
             notification.ReplacementTag,
             _viewModel.ShowNotificationPreviews,
-            _notificationPrivacyGate.Capture());
+            _notificationPrivacyGate.Capture(),
+            IsTest: false);
         var cleanupReady =
             await EnsurePendingWindowsNotificationCleanupAsync();
         var modernShown = cleanupReady
@@ -1424,7 +1425,8 @@ public partial class MainWindow : Window
                             delivery.SteamTitle,
                             delivery.Preview,
                             delivery.ReplacementTag)),
-                _lifetimeToken);
+                rejectedResult: false,
+                cancellationToken: _lifetimeToken);
         if (_lifetime.IsCancellationRequested)
         {
             return;
@@ -1448,7 +1450,8 @@ public partial class MainWindow : Window
                         service.Remove(delivery.AccountId);
                         return true;
                     },
-                    _lifetimeToken);
+                    rejectedResult: false,
+                    cancellationToken: _lifetimeToken);
             }
 
             return;
@@ -1489,11 +1492,13 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(delivery.ReplacementTag))
         {
             var retained = _pendingBalloonNotifications.Where(existing =>
-                existing.AccountId != delivery.AccountId
-                || !string.Equals(
+                !WindowsNotificationDeliveryPolicy.IsSameReplacement(
+                    existing.AccountId,
                     existing.ReplacementTag,
+                    existing.IsTest,
+                    delivery.AccountId,
                     delivery.ReplacementTag,
-                    StringComparison.Ordinal)).ToArray();
+                    delivery.IsTest)).ToArray();
             _pendingBalloonNotifications.Clear();
             foreach (var existing in retained)
             {
@@ -1646,9 +1651,37 @@ public partial class MainWindow : Window
         return windowsCleanupConfirmed;
     }
 
-    internal async Task ClearWindowsNotificationsForValidationAsync()
+    internal async Task<bool> ClearWindowsNotificationsForValidationAsync()
     {
-        _ = await PurgeWindowsNotificationsAsync(accountId: null);
+        var retained = _pendingBalloonNotifications
+            .Where(notification => !notification.IsTest)
+            .ToArray();
+        _pendingBalloonNotifications.Clear();
+        foreach (var notification in retained)
+        {
+            _pendingBalloonNotifications.Enqueue(notification);
+        }
+
+        if (_activeBalloonNotification?.IsTest == true)
+        {
+            _activeBalloonNotification = null;
+            _balloonReleaseTimer.Stop();
+            var shouldRemainVisible = _viewModel.EnableWindowsNotifications
+                && _notificationTrayIcon is not null;
+            _ = TrySetNotificationIconVisible(false);
+            _ = TrySetNotificationIconVisible(shouldRemainVisible);
+            if (_pendingBalloonNotifications.Count > 0)
+            {
+                QueueNextWindowsNotification();
+            }
+        }
+
+        var modernCleanupRequired = _appNotifications.IsReady;
+        var modernCleanupConfirmed = await _windowsNotificationCommands.EnqueueAsync(
+            static service => service.RemoveTestNotifications(),
+            rejectedResult: false,
+            cancellationToken: _lifetimeToken);
+        return !modernCleanupRequired || modernCleanupConfirmed;
     }
 
     private async void OnNotificationClicked(object sender, RoutedEventArgs e)
@@ -1713,7 +1746,8 @@ public partial class MainWindow : Window
     {
         var removed = await _windowsNotificationCommands.EnqueueAsync(
             service => service.RemoveMany(removeAll, pendingAccountIds),
-            _lifetimeToken);
+            rejectedResult: false,
+            cancellationToken: _lifetimeToken);
         if (!removed)
         {
             return false;
@@ -1799,7 +1833,8 @@ public partial class MainWindow : Window
             modernReady = cleanupReady
                 && await _windowsNotificationCommands.EnqueueAsync(
                     service => service.TryEnable(),
-                    _lifetimeToken);
+                    rejectedResult: false,
+                    cancellationToken: _lifetimeToken);
         }
         else
         {
@@ -1810,7 +1845,8 @@ public partial class MainWindow : Window
             var cleanupSucceeded =
                 await _windowsNotificationCommands.EnqueueAsync(
                     service => service.Disable(),
-                    _lifetimeToken);
+                    rejectedResult: false,
+                    cancellationToken: _lifetimeToken);
             if (cleanupSucceeded
                 && cleanupRequestId is Guid completedRequestId)
             {
@@ -1883,28 +1919,17 @@ public partial class MainWindow : Window
             return;
         }
 
-        var account = _viewModel.SelectedAccount;
-        var delivery = account is null
-            ? new WindowsNotificationDelivery(
-                null,
-                null,
-                "SteamSwitchboard",
-                string.Empty,
-                "Test alert",
-                "Windows alerts are working. Click to open Switchboard.",
-                SettingsTestReplacementTag,
-                false,
-                _notificationPrivacyGate.Capture())
-            : new WindowsNotificationDelivery(
-                account.Id,
-                null,
-                account.DisplayName,
-                account.SteamLoginName,
-                "Test alert",
-                "Windows alerts are working. Click to open this profile.",
-                SettingsTestReplacementTag,
-                false,
-                _notificationPrivacyGate.Capture());
+        var delivery = new WindowsNotificationDelivery(
+            null,
+            null,
+            "SteamSwitchboard",
+            string.Empty,
+            "Test alert",
+            "Windows alerts are working. Click to open Switchboard.",
+            SettingsTestReplacementTag,
+            false,
+            _notificationPrivacyGate.Capture(),
+            IsTest: true);
         if (sender is Button button)
         {
             button.IsEnabled = false;
@@ -1931,26 +1956,26 @@ public partial class MainWindow : Window
                             delivery.Preview,
                             delivery.ReplacementTag,
                             isTest: true)),
-                _lifetimeToken);
+                rejectedResult: false,
+                cancellationToken: _lifetimeToken);
         if (_lifetime.IsCancellationRequested)
         {
             return;
         }
 
-        var accountStillExists = delivery.AccountId is not Guid accountId
-            || (_viewModel.Accounts.Any(item => item.Id == accountId)
-                && !_viewModel.IsAccountDeletionPending(accountId));
-        if (!_viewModel.EnableWindowsNotifications || !accountStillExists)
+        if (!_viewModel.EnableWindowsNotifications)
         {
             if (modernShown)
             {
-                _ = await _windowsNotificationCommands.EnqueueAsync(
-                    service =>
-                    {
-                        service.Remove(delivery.AccountId);
-                        return true;
-                    },
-                    _lifetimeToken);
+                var cleanupConfirmed = await _windowsNotificationCommands.EnqueueAsync(
+                    static service => service.RemoveTestNotifications(),
+                    rejectedResult: false,
+                    cancellationToken: _lifetimeToken);
+                if (!cleanupConfirmed)
+                {
+                    WindowsNotificationStatusText.Text =
+                        "Windows could not confirm test-alert cleanup yet. The generic test expires automatically.";
+                }
             }
 
             if (sender is Button cancelledButton)
@@ -2163,7 +2188,8 @@ public partial class MainWindow : Window
         {
             finalCleanup = _windowsNotificationCommands.EnqueueAsync(
                 service => service.RemoveMany(removeAll, pendingAccountIds),
-                CancellationToken.None);
+                rejectedResult: false,
+                cancellationToken: CancellationToken.None);
         }
 
         _lifetime.Cancel();
@@ -2235,10 +2261,29 @@ public partial class MainWindow : Window
         string Preview,
         string? ReplacementTag,
         bool PreviewWasEnabled,
-        long PrivacyRevision)
+        long PrivacyRevision,
+        bool IsTest)
     {
         public string AccountIdentity => string.IsNullOrWhiteSpace(AccountLoginName)
             ? AccountDisplayName
             : $"{AccountDisplayName} — Steam login: {AccountLoginName}";
     }
+}
+
+internal static class WindowsNotificationDeliveryPolicy
+{
+    internal static bool IsSameReplacement(
+        Guid? existingAccountId,
+        string? existingReplacementTag,
+        bool existingIsTest,
+        Guid? incomingAccountId,
+        string? incomingReplacementTag,
+        bool incomingIsTest) =>
+        !string.IsNullOrWhiteSpace(incomingReplacementTag)
+        && existingAccountId == incomingAccountId
+        && existingIsTest == incomingIsTest
+        && string.Equals(
+            existingReplacementTag,
+            incomingReplacementTag,
+            StringComparison.Ordinal);
 }

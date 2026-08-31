@@ -53,4 +53,43 @@ public sealed class SteamInstallationServiceTests
 
         Assert.IsFalse(SteamExecutableTrust.IsTrustedValveExecutable(fakeSteam));
     }
+
+    [TestMethod]
+    public void SteamExecutableTrust_RequiresSteamVersionIdentity()
+    {
+        Assert.IsTrue(SteamExecutableTrust.HasExpectedSteamMetadata(
+            "steam.exe",
+            "Steam",
+            "Valve Corporation"));
+        Assert.IsFalse(SteamExecutableTrust.HasExpectedSteamMetadata(
+            "other-valve-tool.exe",
+            "Steam",
+            "Valve Corporation"));
+        Assert.IsFalse(SteamExecutableTrust.HasExpectedSteamMetadata(
+            "steam.exe",
+            "Another Valve Product",
+            "Valve Corporation"));
+        Assert.IsFalse(SteamExecutableTrust.HasExpectedSteamMetadata(
+            "steam.exe",
+            "Steam",
+            "Untrusted Publisher"));
+    }
+
+    [TestMethod]
+    public void SteamExecutableTrust_RequiresExpectedInstallationLayout()
+    {
+        using var temporary = new TemporaryDirectory();
+        var fakeSteam = temporary.CreateFile(
+            System.IO.Path.Combine("Steam", "steam.exe"));
+
+        Assert.IsFalse(SteamExecutableTrust.HasExpectedInstallationLayout(fakeSteam));
+        Directory.CreateDirectory(System.IO.Path.Combine(
+            System.IO.Path.GetDirectoryName(fakeSteam)!,
+            "config"));
+        Assert.IsFalse(SteamExecutableTrust.HasExpectedInstallationLayout(fakeSteam));
+        Directory.CreateDirectory(System.IO.Path.Combine(
+            System.IO.Path.GetDirectoryName(fakeSteam)!,
+            "steamapps"));
+        Assert.IsTrue(SteamExecutableTrust.HasExpectedInstallationLayout(fakeSteam));
+    }
 }

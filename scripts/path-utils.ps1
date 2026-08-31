@@ -69,11 +69,25 @@ function Test-ReleaseProductVersion {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProductVersion,
-        [Parameter(Mandatory)][string]$ExpectedVersion
+        [Parameter(Mandatory)][string]$ExpectedVersion,
+        [string]$ExpectedSourceRevision
     )
 
     if ($ProductVersion.Length -gt 128 -or $ExpectedVersion.Length -gt 128) {
         return $false
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedSourceRevision)) {
+        if (-not [System.Text.RegularExpressions.Regex]::IsMatch(
+                $ExpectedSourceRevision,
+                '\A(?:[0-9A-Fa-f]{40}|[0-9A-Fa-f]{64})\z',
+                [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+            return $false
+        }
+
+        return $ProductVersion.Equals(
+            "$ExpectedVersion+$ExpectedSourceRevision",
+            [System.StringComparison]::OrdinalIgnoreCase)
     }
 
     if ($ProductVersion.Equals(
