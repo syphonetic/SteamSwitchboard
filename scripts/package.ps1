@@ -15,6 +15,10 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'path-utils.ps1')
 
+if ($RequireSignature -and [string]::IsNullOrWhiteSpace($ExpectedPublisher)) {
+    throw 'Signature enforcement requires an exact expected publisher.'
+}
+
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $projectFile = Join-Path $projectRoot 'src\SteamSwitchboard.App\SteamSwitchboard.App.csproj'
 [xml]$projectXml = Get-Content -LiteralPath $projectFile -Raw
@@ -30,64 +34,6 @@ $releaseRoot = Join-Path $projectRoot 'artifacts\release'
 $packageName = "SteamSwitchboard-$version-$Runtime"
 $archivePath = Join-Path $releaseRoot "$packageName.zip"
 $checksumPath = "$archivePath.sha256"
-
-function New-DeterministicArchive {
-    param(
-        [Parameter(Mandatory)][string]$SourceDirectory,
-        [Parameter(Mandatory)][string]$RootName,
-        [Parameter(Mandatory)][string]$DestinationPath
-    )
-
-    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-    $relativePaths = [string[]]@(
-        Get-ChildItem -LiteralPath $SourceDirectory -File -Recurse |
-            ForEach-Object {
-                Get-ContainedRelativePath `
-                    -RootPath $SourceDirectory `
-                    -CandidatePath $_.FullName
-            })
-    [Array]::Sort($relativePaths, [System.StringComparer]::Ordinal)
-
-    $stream = [System.IO.File]::Open(
-        $DestinationPath,
-        [System.IO.FileMode]::CreateNew,
-        [System.IO.FileAccess]::Write,
-        [System.IO.FileShare]::None)
-    $archive = [System.IO.Compression.ZipArchive]::new(
-        $stream,
-        [System.IO.Compression.ZipArchiveMode]::Create,
-        $false)
-    $fixedTimestamp = [System.DateTimeOffset]::new(
-        2000, 1, 1, 0, 0, 0, [System.TimeSpan]::Zero)
-    try {
-        foreach ($relativePath in $relativePaths) {
-            $entryName = "$RootName/$($relativePath.Replace('\', '/'))"
-            $entry = $archive.CreateEntry(
-                $entryName,
-                [System.IO.Compression.CompressionLevel]::Optimal)
-            $entry.LastWriteTime = $fixedTimestamp
-            $entry.ExternalAttributes = 0
-
-            $input = [System.IO.File]::Open(
-                (Join-Path $SourceDirectory $relativePath),
-                [System.IO.FileMode]::Open,
-                [System.IO.FileAccess]::Read,
-                [System.IO.FileShare]::Read)
-            $output = $entry.Open()
-            try {
-                $input.CopyTo($output)
-            }
-            finally {
-                $output.Dispose()
-                $input.Dispose()
-            }
-        }
-    }
-    finally {
-        $archive.Dispose()
-        $stream.Dispose()
-    }
-}
 
 & (Join-Path $PSScriptRoot 'verify.ps1') -Configuration $Configuration
 

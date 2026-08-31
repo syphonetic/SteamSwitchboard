@@ -8,7 +8,7 @@ SteamSwitchboard is a privacy-first Windows companion for people who use several
 
 ![SteamSwitchboard account workspace](artifacts/ui-final.png)
 
-> **Initial release:** version 1.0.0 is the first public source release. Any locally generated Windows build is unsigned; its checksum detects accidental corruption but does not authenticate the publisher. CI deliberately does not upload that candidate. Sign the first-party binaries and distribute them through an authenticated installer/package before public binary distribution.
+> **Release status:** version 1.0.0 remains the immutable source-only release. Version 1.0.1 adds the protected Microsoft Artifact Signing pipeline for the first public Windows binary. Local packages remain unsigned development builds; only ZIPs attached by the protected GitHub release workflow are publisher-authenticated releases.
 
 ## What it solves
 
@@ -20,7 +20,7 @@ SteamSwitchboard is a privacy-first Windows companion for people who use several
 
 ## Quick start
 
-1. Extract the downloaded `SteamSwitchboard-1.0.0-win-x64.zip`.
+1. From the GitHub Release, download `SteamSwitchboard-1.0.1-win-x64.zip` and its `.sha256` file, then verify the checksum before extracting it.
 2. Run `SteamSwitchboard.exe`.
 3. Choose **Add account**, enter a private profile nickname and the account's exact Steam login name, then sign in on the official Steam page shown inside the app.
 4. Select any account to use its conversation workspace. Up to 16 open profiles can notify you in the background; additional saved profiles reopen when selected.
@@ -96,13 +96,13 @@ For the extended dependency, secret, configuration, and static-analysis pass:
 ./scripts/security-audit.ps1 -RequireExternalScanners
 ```
 
-To create the self-contained Windows package:
+To create an unsigned self-contained development package:
 
 ```powershell
 ./scripts/package.ps1
 ```
 
-The ZIP and SHA-256 checksum are written to `artifacts/release/`. Packaging requires a clean Git checkout, binds both first-party binaries to the complete source revision, includes the exact restored third-party license/notice texts, validates archive paths before extraction, runs adversarial validator fixtures, excludes debug/session data, and normalises ZIP order and timestamps. It rechecks the source revision and worktree immediately before publishing the result. Pass `-RequireSignature` only in a release environment where first-party binaries have been Authenticode-signed.
+The ZIP and SHA-256 checksum are written to `artifacts/release/`. Packaging requires a clean Git checkout, binds both first-party binaries to the complete source revision, includes the exact restored third-party license/notice texts, validates archive paths before extraction, runs adversarial validator fixtures, excludes debug/session data, and normalises ZIP order and timestamps. It rechecks the source revision and worktree immediately before publishing the result. The protected GitHub tag workflow signs only the two first-party binaries through Microsoft Artifact Signing, then independently rebuilds the unsigned baseline on a fresh non-signing runner before it validates the publisher and trusted timestamp, attests the result, and publishes it.
 
 ## Project map
 
@@ -114,11 +114,12 @@ The ZIP and SHA-256 checksum are written to `artifacts/release/`. Packaging requ
 - `docs/GITHUB_RELEASE.md` — beginner GitHub push, Actions build/scan, source-release, and signed-binary requirements
 - `scripts/verify.ps1` — reproducible verification entry point
 - `scripts/package.ps1` — self-contained Windows release packaging
+- `scripts/prepare-signed-release.ps1` / `finalize-signed-release.ps1` — integrity-locked cloud-signing boundary
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the required local checks and project security boundaries. GitHub pushes and pull requests run the same Windows Release verification gate automatically.
 
-GitHub Actions uses checksum-pinned Gitleaks plus pinned Semgrep and Trivy before the Windows Release build/test/package gate, then independently rebuilds the package and requires matching hashes. See the [GitHub release guide](docs/GITHUB_RELEASE.md) for the exact first-push, source-release, and signed-binary steps.
+GitHub Actions uses checksum-pinned Gitleaks plus pinned Semgrep and Trivy before the Windows Release build/test/package gate, then independently rebuilds the package and requires matching hashes. Protected version tags additionally invoke Microsoft Artifact Signing through GitHub OIDC, attest the signed assets, and publish only after an isolated least-privilege handoff. See the [GitHub release guide](docs/GITHUB_RELEASE.md) for setup and release steps.
 
 SteamSwitchboard is unofficial and is not affiliated with or endorsed by Valve Corporation. Steam and the Steam logo are trademarks of Valve Corporation.

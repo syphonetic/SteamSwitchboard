@@ -1,131 +1,207 @@
-# GitHub CI and release guide
+# GitHub CI and signed release guide
 
-This repository's `Verify` workflow is the release gate. It runs on every pull request and push, including version-tag pushes. The workflow has read-only repository permission and does not publish a GitHub Release.
+SteamSwitchboard uses one `Verify` workflow for pull requests, pushes, and protected version tags. Ordinary runs have read-only repository access. A version tag can publish a Windows binary only after all source/dependency scanners and the reproducible Windows package gate pass.
 
-For every pull request and push, the dedicated Ubuntu scanner job runs checksum-pinned Gitleaks over complete Git history, then pinned Semgrep and Trivy. After that job succeeds, the Windows job:
+The release path is deliberately split:
 
-1. Restores NuGet packages in locked mode.
-2. Builds and tests in `Release` with warnings treated as errors.
-3. Runs `scripts/security-audit.ps1`, including the repository's transitive NuGet vulnerability audit and the complete build/test gate.
-4. Runs `scripts/package.ps1` twice around a clean build, requiring identical package hashes; each pass creates a runner-local self-contained Windows x64 package and runs the normal and adversarial package validators.
+1. The approval-gated `sign-release` job rebuilds the unsigned ZIP twice and requires identical SHA-256 hashes.
+2. It validates/extracts that exact candidate and records every payload path, length, and hash.
+3. GitHub OIDC signs in to Azure without a client secret. Microsoft Artifact Signing receives only the absolute paths to `SteamSwitchboard.exe` and `SteamSwitchboard.dll`, then the job exports only the signed payload.
+4. A fresh `validate-release` runner has no Azure environment/identity. It independently rebuilds the protected source tag twice, regenerates the trusted manifest from its own reproducible archive, treats the signed payload as untrusted, and permits only Authenticode metadata to differ in the two first-party files.
+5. Finalization requires valid same-certificate Authenticode signatures, the configured publisher, code-signing EKU, trusted RFC 3161 timestamps, and unchanged executable code/resources; GitHub then signs build-provenance attestations.
+6. A separate `publish-release` job has GitHub release-write permission but no Azure identity. It verifies the handoff checksum and exact workflow/source provenance before creating the GitHub Release.
 
-For a tag named `vMAJOR.MINOR.PATCH` (or a prerelease form such as `v1.2.3-beta.1`), the workflow also checks that the tag exactly matches the `<Version>` in `src/SteamSwitchboard.App/SteamSwitchboard.App.csproj`. The current workflow deliberately does not upload its unsigned Windows package. CI proves the source builds and packages reproducibly, then discards that runner-local candidate.
+Every referenced GitHub/Azure action is pinned to an immutable commit. No PFX, certificate private key, Azure client secret, or long-lived GitHub token belongs in this repository.
 
-GitHub's hosted Windows runner has no normal interactive desktop, Steam session, or notification surface. CI compiles the real-window harness and runs all deterministic tests, scanners, and package checks, but the composed WebView/window check and the actual Windows-alert check remain local release acceptance steps:
+## One-time Microsoft Artifact Signing setup
+
+Microsoft Public Trust identity validation is an external prerequisite. Microsoft currently limits organization and individual eligibility by region, and public validation can take 1–20 business days or longer. Check the current [Artifact Signing quickstart and eligibility](https://learn.microsoft.com/azure/artifact-signing/quickstart) before paying for or creating resources.
+
+1. In Azure, select the intended subscription and register `Microsoft.CodeSigning`.
+
+   ```powershell
+   az login
+   az account set --subscription '<subscription-id>'
+   az provider register --namespace Microsoft.CodeSigning
+   az extension add --name artifact-signing
+   ```
+
+2. Create an Artifact Signing account in a supported region. Basic is sufficient unless the project's signing volume requires another tier.
+
+   ```powershell
+   az group create --name '<resource-group>' --location '<azure-region>'
+   az artifact-signing create `
+     --name '<globally-unique-account>' `
+     --location '<azure-region>' `
+     --resource-group '<resource-group>' `
+     --sku Basic
+   ```
+
+3. In the Azure portal, assign your human account the required identity-verifier access, create a **Public** identity validation, and complete every email/document/identity step. Identity validation cannot be completed through the CLI. Wait until its state is **Completed**.
+
+4. Create a **PublicTrust** certificate profile from the completed identity. Record its account name, profile name, regional endpoint, and exact certificate common name shown by the subject preview.
+
+   ```powershell
+   az artifact-signing certificate-profile create `
+     --resource-group '<resource-group>' `
+     --account-name '<artifact-signing-account>' `
+     --name '<certificate-profile>' `
+     --profile-type PublicTrust `
+     --identity-validation-id '<completed-identity-validation-id>'
+   ```
+
+   Do not use `PrivateTrust` for a public download: other users' Windows installations will not trust it by default.
+
+5. Create one dedicated Microsoft Entra application/service principal for this workflow. It receives no password or certificate credential.
+
+   ```powershell
+   $ApplicationId = az ad app create `
+     --display-name 'SteamSwitchboard GitHub Artifact Signing' `
+     --query appId `
+     --output tsv
+   $ServicePrincipalObjectId = az ad sp create `
+     --id $ApplicationId `
+     --query id `
+     --output tsv
+   $TenantId = az account show --query tenantId --output tsv
+   $SubscriptionId = az account show --query id --output tsv
+   ```
+
+6. Federate that application to exactly the GitHub `release` environment. The subject is case-sensitive and must remain exactly as shown.
+
+   ```powershell
+   $FederatedCredential = @{
+     name = 'SteamSwitchboard-GitHub-release'
+     issuer = 'https://token.actions.githubusercontent.com'
+     subject = 'repo:syphonetic/SteamSwitchboard:environment:release'
+     description = 'Secretless signing from the protected SteamSwitchboard release environment'
+     audiences = @('api://AzureADTokenExchange')
+   } | ConvertTo-Json -Compress
+
+   az ad app federated-credential create `
+     --id $ApplicationId `
+     --parameters $FederatedCredential
+   ```
+
+7. Give only that service principal the `Artifact Signing Certificate Profile Signer` role, scoped to one profile—not the subscription, resource group, or whole signing account.
+
+   ```powershell
+   $ProfileScope = "/subscriptions/$SubscriptionId/resourceGroups/<resource-group>/providers/Microsoft.CodeSigning/codeSigningAccounts/<artifact-signing-account>/certificateProfiles/<certificate-profile>"
+   az role assignment create `
+     --assignee-object-id $ServicePrincipalObjectId `
+     --assignee-principal-type ServicePrincipal `
+     --role 'Artifact Signing Certificate Profile Signer' `
+     --scope $ProfileScope
+   ```
+
+Microsoft documents this least-privilege scope in its [Artifact Signing RBAC guide](https://learn.microsoft.com/azure/artifact-signing/tutorial-assign-roles).
+
+## One-time GitHub protection setup
+
+1. In **Settings → Environments**, create an environment named exactly `release`.
+2. Add at least one required reviewer. Keep “prevent self-review” off if this is currently a one-maintainer repository; turn it on after a second trusted maintainer is available.
+3. Limit deployment branches/tags to selected tags matching `v*`.
+4. Create an active tag ruleset matching `refs/tags/v*` that blocks tag deletion and non-fast-forward updates. The workflow checks `github.ref_protected` and refuses an unprotected tag.
+5. Protect `main` and require both `Source and dependency security gate` and `Windows Release gate` before merging. Do not permit pull requests to bypass those checks.
+6. In **Settings → General → Releases**, enable **release immutability**. GitHub then locks a published release's tag and assets and generates a release attestation. This applies only to releases published after the setting is enabled.
+
+Store these six non-secret Azure identifiers as **environment variables** on `release` (not repository-wide values):
+
+| Variable | Value |
+|---|---|
+| `AZURE_CLIENT_ID` | Dedicated Entra application's client ID |
+| `AZURE_TENANT_ID` | Azure directory/tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Subscription containing Artifact Signing |
+| `ARTIFACT_SIGNING_ENDPOINT` | Exact regional HTTPS endpoint, such as `https://eus.codesigning.azure.net` |
+| `ARTIFACT_SIGNING_ACCOUNT` | Artifact Signing account name |
+| `ARTIFACT_SIGNING_PROFILE` | PublicTrust certificate profile name |
+
+Store `ARTIFACT_SIGNING_PUBLISHER` as a **repository variable** containing the exact certificate common name shown in the subject preview. The clean validation job intentionally does not reference the Azure-enabled `release` environment, so its OIDC token cannot match the signing federation; the non-secret publisher name is the only shared repository-level value.
+
+With GitHub CLI authenticated to `syphonetic`, the variables can be added without exposing any secret:
 
 ```powershell
-./scripts/test-ui-regression.ps1
-dotnet run --project tests/SteamSwitchboard.UiRegression -c Release -- --notification-smoke
+gh variable set AZURE_CLIENT_ID --env release --body $ApplicationId
+gh variable set AZURE_TENANT_ID --env release --body $TenantId
+gh variable set AZURE_SUBSCRIPTION_ID --env release --body $SubscriptionId
+gh variable set ARTIFACT_SIGNING_ENDPOINT --env release --body 'https://<region-code>.codesigning.azure.net'
+gh variable set ARTIFACT_SIGNING_ACCOUNT --env release --body '<artifact-signing-account>'
+gh variable set ARTIFACT_SIGNING_PROFILE --env release --body '<certificate-profile>'
+gh variable set ARTIFACT_SIGNING_PUBLISHER --body '<exact-certificate-common-name>'
 ```
 
-## First push to GitHub
+Never add `AZURE_CLIENT_SECRET`; the workflow is intentionally designed to reject the need for one.
 
-These commands are instructions for your computer. The CI workflow does not create or configure a remote. This checkout is already a Git repository on the `main` branch; when this guide was added, it had no configured remote.
+## Pull-request and release flow
 
-1. Sign in to GitHub and [create a new empty repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-new-repository). Do not initialize it with a README, license, or `.gitignore` when this local folder already contains those files.
-2. Open PowerShell and inspect what will be pushed:
-
-   ```powershell
-   Set-Location J:\tools\SteamSwitchboard
-   git status
-   git branch --show-current
-   git remote -v
-   ```
-
-   The branch should be `main`. Review every path reported by `git status`; do not stage unrelated or secret files.
-
-3. If the intended local work is not committed yet, stage it, review it again, and commit it. `git add .` stages every non-ignored change, so list individual paths instead when only some changes belong in the commit.
-
-   ```powershell
-   git add .
-   git status
-   git commit -m "Prepare SteamSwitchboard for GitHub"
-   ```
-
-4. Replace `YOUR-NAME` with your GitHub user or organization name, add the new empty repository as `origin`, and push `main`:
-
-   ```powershell
-   git remote add origin https://github.com/YOUR-NAME/SteamSwitchboard.git
-   git push -u origin main
-   ```
-
-5. Open the repository's **Actions** tab on GitHub, select **Verify**, and wait for both **Source and dependency security gate** and **Windows Release gate** to finish successfully. You can also use **Run workflow** there to repeat the checks manually.
-
-6. This release checkout already contains the annotated `v1.0.0` tag. Confirm that it names the same commit as `main`, then push the existing tag; do not try to create it again:
-
-   ```powershell
-   $HeadCommit = git rev-parse HEAD
-   $TagCommit = git rev-list -n 1 v1.0.0
-   if ($HeadCommit -cne $TagCommit) { throw 'v1.0.0 does not point to the current release commit.' }
-   git push origin v1.0.0
-   ```
-
-7. Wait for both gates to pass again on the `v1.0.0` tag run. A malformed tag or tag/project-version mismatch fails that run.
-
-If `git remote -v` already shows the correct `origin`, skip `git remote add`. If it shows a different destination, stop and verify which repository should receive the code before changing anything. GitHub also documents [remote repository management](https://docs.github.com/en/get-started/git-basics/managing-remote-repositories).
-
-## Normal change and pull-request flow
-
-Create a branch, commit the intended files, and push the branch:
+For ordinary changes:
 
 ```powershell
-Set-Location J:\tools\SteamSwitchboard
 git switch -c my-change
-git add path\to\changed-file
-git status
-git commit -m "Describe the change"
+git add <reviewed-paths>
+git commit -m 'Describe the change'
 git push -u origin my-change
 ```
 
-On GitHub, choose **Compare & pull request**, review the file list, create the pull request, and wait for **Windows Release gate** to pass. See GitHub's [pull-request instructions](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request) if the prompt is not visible.
+Open a pull request, review every changed path, and wait for both required gates. Merge only after they pass.
 
-Repository administrators can optionally require **Windows Release gate** in the `main` branch protection rules. Do not select a similarly named check from an untrusted workflow.
+`v1.0.0` is already published as the immutable source-only initial tag. Do not move, delete, or recreate it. Version `1.0.1` is the first signed-binary candidate. After this release-pipeline change is merged and the Azure/GitHub setup above is complete:
 
-## Optional GitHub-native CodeQL layer
+```powershell
+git switch main
+git pull --ff-only
+$Version = '1.0.1'
+$ProjectVersion = ([xml](Get-Content './src/SteamSwitchboard.App/SteamSwitchboard.App.csproj' -Raw)).Project.PropertyGroup.Version
+if ($ProjectVersion -cne $Version) { throw 'Project version does not match the intended release.' }
+git status --short
+git tag -a "v$Version" -m "SteamSwitchboard $Version"
+git push origin "v$Version"
+```
 
-For a public repository (or an eligible organization repository with GitHub Code Security), you can add GitHub's own CodeQL analysis without editing this workflow: open **Settings → Advanced Security**, find **CodeQL analysis**, choose **Set up**, and enable **Default**. GitHub currently supports no-build analysis for C#, so this complements the enforced Gitleaks/Semgrep/Trivy/NuGet gates without replacing the Windows build. See GitHub's official [CodeQL default-setup guide](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/configure-code-scanning).
+Open **Actions → Verify**, select the tag run, and approve the `release` environment after confirming the commit/tag/version. The workflow then publishes the GitHub Release automatically. A failed run never uploads an unsigned binary as a release asset. Fix the cause and rerun the same workflow; never move a public version tag to different source.
 
-After the first successful runs, use a branch ruleset or branch protection to require **Source and dependency security gate** and **Windows Release gate** before merging to `main`. Keep workflow permissions read-only unless a future, separately reviewed release-publishing design genuinely needs write access.
+## Independent release verification
 
-## Publish a source version
+Download the two assets from the Release page into an empty directory, then verify all three trust signals:
 
-For the initial 1.0.0 release, the first-push instructions above already push the existing reviewed tag. For each later version:
+```powershell
+$Version = '1.0.1'
+$Archive = "SteamSwitchboard-$Version-win-x64.zip"
+$Expected = ((Get-Content "$Archive.sha256" -Raw).Trim() -split '  ', 2)[0]
+$Actual = (Get-FileHash $Archive -Algorithm SHA256).Hash
+if (-not $Actual.Equals($Expected, [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'Release checksum mismatch.'
+}
 
-1. Update `<Version>` in `src/SteamSwitchboard.App/SteamSwitchboard.App.csproj` to the intended semantic version, update any release notes, commit the change, and push it through the normal pull-request flow.
-2. Wait for both gates on the `main` branch to pass.
-3. From an up-to-date `main` branch, create and push a new annotated tag that exactly matches the project version:
+gh attestation verify $Archive `
+  --repo syphonetic/SteamSwitchboard `
+  --signer-workflow syphonetic/SteamSwitchboard/.github/workflows/verify.yml `
+  --source-ref "refs/tags/v$Version" `
+  --deny-self-hosted-runners
+gh attestation verify "$Archive.sha256" `
+  --repo syphonetic/SteamSwitchboard `
+  --signer-workflow syphonetic/SteamSwitchboard/.github/workflows/verify.yml `
+  --source-ref "refs/tags/v$Version" `
+  --deny-self-hosted-runners
+```
 
-   ```powershell
-   Set-Location J:\tools\SteamSwitchboard
-   git switch main
-   git pull --ff-only
-   $Version = '1.0.0'
-   git tag -a "v$Version" -m "SteamSwitchboard $Version"
-   git push origin "v$Version"
-   ```
+After extraction, inspect both first-party files:
 
-4. On GitHub, open **Actions** > **Verify**, select the run for the version tag, and wait for both gates to pass. A malformed tag or tag/project-version mismatch fails the run.
+```powershell
+Get-AuthenticodeSignature ".\SteamSwitchboard-$Version-win-x64\SteamSwitchboard.exe" |
+  Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+Get-AuthenticodeSignature ".\SteamSwitchboard-$Version-win-x64\SteamSwitchboard.dll" |
+  Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+```
 
-For 1.0.0 or a later version whose tag gate passed, open the repository's **Releases** page, choose **Draft a new release**, select the existing `vVERSION` tag, enter a title and release notes, and publish it without a Windows binary. GitHub automatically links source archives for the tagged source. GitHub documents [managing releases](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository).
-
-This safely publishes the source version while keeping the workflow token at `contents: read`. Do not attach the current unsigned ZIP to a public release.
-
-## Required before a Windows binary release
-
-The local/CI package is unsigned by design and exists only for validation. A SHA-256 sidecar detects corruption only when the sidecar itself is trusted; it cannot authenticate a publisher if an attacker replaces both files. A Git tag or GitHub Release also does not Authenticode-sign Windows binaries.
-
-Before attaching a Windows ZIP to a public release:
-
-- Obtain a trusted Windows Authenticode code-signing certificate, preferably protected by a hardware security module or a reputable cloud-signing service, and use a trusted timestamp service.
-- Never commit a PFX file, private key, certificate password, signing token, or service credential to this repository.
-- Sign the executable and first-party DLL before the ZIP and checksum are created, then run packaging with `-RequireSignature -ExpectedPublisher '<publisher>'` and independently validate the resulting package against the exact tagged source revision before upload.
-- Treat a self-signed certificate as a development aid only; it is not automatically trusted on other users' computers.
-
-The existing `package.ps1 -RequireSignature` option validates signatures; it does not create them. Adding signing requires a separately reviewed protected GitHub environment or signing service, least-privilege credentials, exact publisher enforcement, and a signed-package artifact step. Until that exists, the source release is publishable but the Windows ZIP is not a public release asset.
+Both statuses must be `Valid`, both files must show the expected publisher, and both must have timestamp certificates. Windows' Properties dialog should show the same Digital Signatures identity.
 
 ## Troubleshooting
 
-- **The version-tag run fails before packaging:** make the tag text match the project's `<Version>` exactly. Publish a corrected version commit and tag instead of moving a release tag that users may already trust.
-- **No Windows artifact appears:** this is intentional while the build is unsigned. The workflow compiles, tests, scans, packages twice, and compares hashes without uploading the candidate.
-- **A scanner job cannot download its rules/database:** retry once in case the upstream registry had a transient outage. Do not bypass a repeatable scanner failure; inspect the job log and pinned scanner version. Local parity is available with `security-audit.ps1 -RequireExternalScanners` when both tools are installed.
-- **Windows warns about a local candidate:** it is unsigned and must not be treated as the public binary release. Self-contained deployment removes the need for a separately installed .NET runtime; it does not establish publisher trust.
+- **Release job says the tag is unprotected:** activate the `v*` tag ruleset; do not remove the check from the workflow.
+- **Azure login has no matching federated identity:** verify the exact subject `repo:syphonetic/SteamSwitchboard:environment:release`, issuer, audience, client ID, and tenant ID.
+- **Artifact Signing returns authorization denied:** assign the signer role to the service principal object ID at the exact certificate-profile scope and allow Azure RBAC propagation time.
+- **Publisher mismatch:** use the certificate profile's exact common name, including punctuation and case, for `ARTIFACT_SIGNING_PUBLISHER`.
+- **Signature has no timestamp:** do not publish. The workflow requires Microsoft's RFC 3161 timestamp and fails closed.
+- **A release already exists for the tag:** inspect it rather than using overwrite/clobber. Publish a new version for changed bytes.
+- **No release appears after normal branch CI:** intentional. Only an annotated, protected `vMAJOR.MINOR.PATCH` tag can enter the signing environment.

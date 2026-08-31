@@ -2,6 +2,23 @@
 
 All notable changes are documented here.
 
+## 1.0.1 — 2026-09-01
+
+First trusted Windows binary release candidate.
+
+### Release security
+
+- Added a protected, tag-only Microsoft Artifact Signing pipeline that authenticates to Azure through short-lived GitHub OIDC credentials; no certificate private key, PFX, Azure client secret, or long-lived GitHub token is stored in the repository.
+- Isolated the signing job from GitHub release-write permission, pinned every GitHub/Azure action to an immutable commit, and limited the Azure identity to the `release` environment and one certificate profile's signer role.
+- Preserved byte-for-byte reproducibility proof on the unsigned candidate before RFC 3161 timestamped signing, then independently rebuilt the trusted baseline on a fresh non-signing runner and allowed only `SteamSwitchboard.exe` and `SteamSwitchboard.dll` to change.
+- Added an integrity manifest, strict signing-staging path and inventory validation, PE-level Authenticode content hashing that excludes only permitted signature metadata, same-certificate/publisher/EKU enforcement, trusted timestamp enforcement, signed-package revalidation, malicious staging fixtures, and atomic final package replacement.
+- Added GitHub build-provenance attestations, an immutable one-day signed-candidate handoff, independent checksum and provenance verification in the publication job, and automatic release creation only from an annotated protected version tag after every existing security/build gate passes.
+
+### Distribution
+
+- Added first-time Microsoft Artifact Signing and GitHub release-environment setup instructions for maintainers.
+- Kept `v1.0.0` immutable as the source-only initial release; `v1.0.1` is the first version eligible for a signed public Windows binary after the Azure identity and certificate profile are activated.
+
 ## 1.0.0 — 2026-08-31
 
 First GitHub-ready source release and self-contained Windows package.

@@ -30,6 +30,14 @@ if ([string]::IsNullOrWhiteSpace($ExpectedVersion)) {
 if ($ExpectedVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
     throw 'The expected package version is invalid.'
 }
+if ($RequireSignature -and [string]::IsNullOrWhiteSpace($ExpectedPublisher)) {
+    throw 'Signature enforcement requires an exact expected publisher.'
+}
+if (-not [string]::IsNullOrWhiteSpace($ExpectedPublisher) `
+    -and ($ExpectedPublisher.Length -gt 256 `
+        -or $ExpectedPublisher -match '[\x00-\x1F\x7F]')) {
+    throw 'The expected package publisher is invalid.'
+}
 
 if ([string]::IsNullOrWhiteSpace($ExpectedSourceRevision)) {
     $sourceRevisionOutput = @(& git -C $projectRoot rev-parse --verify HEAD)
@@ -327,19 +335,45 @@ try {
     }
 
     $signature = Get-AuthenticodeSignature -LiteralPath $executable
+    $verifiedPublisher = $null
+    $verifiedSignerThumbprint = $null
+    $verifiedTimestamped = $false
     if ($RequireSignature) {
         foreach ($firstPartyBinary in @($executable, $applicationDll)) {
             $binarySignature = Get-AuthenticodeSignature -LiteralPath $firstPartyBinary
             if ($binarySignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
                 throw "A required first-party signature is invalid: $firstPartyBinary"
             }
+            if ($null -eq $binarySignature.SignerCertificate `
+                -or $null -eq $binarySignature.TimeStamperCertificate `
+                -or -not (Test-CertificateEnhancedKeyUsage `
+                    -Certificate $binarySignature.SignerCertificate `
+                    -ObjectId '1.3.6.1.5.5.7.3.3') `
+                -or -not (Test-CertificateEnhancedKeyUsage `
+                    -Certificate $binarySignature.TimeStamperCertificate `
+                    -ObjectId '1.3.6.1.5.5.7.3.8')) {
+                throw "A required first-party signature lacks a trusted timestamp or signing purpose: $firstPartyBinary"
+            }
+            $binaryPublisher = $binarySignature.SignerCertificate.GetNameInfo(
+                [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
+                $false)
             if (-not [string]::IsNullOrWhiteSpace($ExpectedPublisher) `
-                -and $binarySignature.SignerCertificate.GetNameInfo(
-                    [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
-                    $false) -ne $ExpectedPublisher) {
+                -and -not $binaryPublisher.Equals(
+                    $ExpectedPublisher,
+                    [System.StringComparison]::Ordinal)) {
                 throw "A first-party binary has an unexpected publisher: $firstPartyBinary"
             }
+            if ($null -eq $verifiedSignerThumbprint) {
+                $verifiedSignerThumbprint = $binarySignature.SignerCertificate.Thumbprint
+                $verifiedPublisher = $binaryPublisher
+            }
+            elseif (-not $verifiedSignerThumbprint.Equals(
+                    $binarySignature.SignerCertificate.Thumbprint,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw 'The first-party binaries were signed by different certificates.'
+            }
         }
+        $verifiedTimestamped = $true
     }
 
     $result = [pscustomobject]@{
@@ -356,6 +390,9 @@ try {
         NotificationLogo = $notificationLogoSize
         SignatureStatus = [string]$signature.Status
         RequiredSignature = [bool]$RequireSignature
+        Publisher = $verifiedPublisher
+        SignerThumbprint = $verifiedSignerThumbprint
+        Timestamped = $verifiedTimestamped
     }
 }
 finally {

@@ -1,0 +1,7 @@
+# Release and trust-boundary changes always request maintainer review.
+* @syphonetic
+/.github/workflows/ @syphonetic
+/scripts/ @syphonetic
+/NuGet.config @syphonetic
+/Directory.Build.props @syphonetic
+/global.json @syphonetic
