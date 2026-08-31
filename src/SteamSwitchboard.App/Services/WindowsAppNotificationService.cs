@@ -10,17 +10,41 @@ namespace SteamSwitchboard.Services;
 
 public sealed class WindowsAppNotificationService : IDisposable
 {
+    private const int MaximumAppLogoBytes = 1024 * 1024;
     private const string OpenAction = "open";
     private const string AccountArgument = "account";
     private const string NotificationArgument = "notification";
     private const string TestNotificationGroup = "switchboard-tests";
+    private static readonly byte[] ExpectedAppLogoSha256 = Convert.FromHexString(
+        "B684FFBB817F43B3992B44D06EAA04DBFCADFA4CBDD1F2A86572317F4FB59993");
+    private static readonly byte[] PngSignature =
+        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
     private readonly object _gate = new();
+    private readonly Uri? _appLogoUri;
+    private readonly FileStream? _appLogoReadLease;
     private AppNotificationManager? _manager;
     private bool _enabled;
     private bool _registered;
     private bool _disposed;
     private bool _initialActivationRead;
+
+    public WindowsAppNotificationService()
+        : this(AppContext.BaseDirectory)
+    {
+    }
+
+    internal WindowsAppNotificationService(string applicationDirectory)
+    {
+        if (TryOpenAppLogo(
+                applicationDirectory,
+                out var appLogoUri,
+                out var appLogoReadLease))
+        {
+            _appLogoUri = appLogoUri;
+            _appLogoReadLease = appLogoReadLease;
+        }
+    }
 
     public event EventHandler<WindowsAppNotificationActivatedEventArgs>? Activated;
 
@@ -150,6 +174,14 @@ public sealed class WindowsAppNotificationService : IDisposable
                     .AddText(safeIdentity)
                     .AddText(safeTitle)
                     .AddText(safePreview);
+                if (_appLogoUri is not null)
+                {
+                    builder.SetAppLogoOverride(
+                        _appLogoUri,
+                        AppNotificationImageCrop.Default,
+                        "SteamSwitchboard");
+                }
+
                 if (accountId is Guid id)
                 {
                     builder.AddArgument(AccountArgument, id.ToString("N"));
@@ -321,6 +353,7 @@ public sealed class WindowsAppNotificationService : IDisposable
 
             _enabled = false;
             DisableRegistrationCore();
+            _appLogoReadLease?.Dispose();
             _disposed = true;
         }
 
@@ -329,6 +362,91 @@ public sealed class WindowsAppNotificationService : IDisposable
 
     private static string GetAccountGroup(Guid accountId) =>
         accountId.ToString("N")[..16];
+
+    internal static bool TryOpenAppLogo(
+        string applicationDirectory,
+        out Uri? appLogoUri,
+        out FileStream? readLease)
+    {
+        appLogoUri = null;
+        readLease = null;
+        if (string.IsNullOrWhiteSpace(applicationDirectory))
+        {
+            return false;
+        }
+
+        FileStream? stream = null;
+        try
+        {
+            if (!LocalPathPolicy.TryNormalizeLocalPath(
+                    applicationDirectory,
+                    out var root)
+                || !Directory.Exists(root))
+            {
+                return false;
+            }
+
+            var candidate = Path.Combine(
+                root,
+                "Assets",
+                "Branding",
+                "SteamSwitchboard-app-logo.png");
+            if (!LocalPathPolicy.TryNormalizeLocalPath(
+                    candidate,
+                    out var path)
+                || !LocalPathPolicy.IsStrictDescendant(path, root))
+            {
+                return false;
+            }
+
+            stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: PngSignature.Length,
+                FileOptions.SequentialScan);
+            if (stream.Length is < 8 or > MaximumAppLogoBytes)
+            {
+                return false;
+            }
+
+            Span<byte> signature = stackalloc byte[PngSignature.Length];
+            if (stream.Read(signature) != signature.Length
+                || !signature.SequenceEqual(PngSignature))
+            {
+                return false;
+            }
+
+            stream.Position = 0;
+            var actualHash = SHA256.HashData(stream);
+            if (!CryptographicOperations.FixedTimeEquals(
+                    actualHash,
+                    ExpectedAppLogoSha256))
+            {
+                return false;
+            }
+
+            stream.Position = 0;
+            appLogoUri = new Uri(path, UriKind.Absolute);
+            readLease = stream;
+            stream = null;
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or IOException
+                or NotSupportedException
+                or UnauthorizedAccessException
+                or System.Security.SecurityException)
+        {
+            return false;
+        }
+        finally
+        {
+            stream?.Dispose();
+        }
+    }
 
     internal static string CreateReplacementTag(
         Guid accountId,

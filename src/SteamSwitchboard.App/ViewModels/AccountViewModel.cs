@@ -34,6 +34,14 @@ public sealed class AccountViewModel : ObservableObject
 
     public string LaunchIdentityLabel => $"{DisplayName} — Steam login: {SteamLoginName}";
 
+    public string AutomationName => UnreadCount switch
+    {
+        0 => $"{LaunchIdentityLabel} — no unread Steam messages",
+        1 => $"{LaunchIdentityLabel} — 1 unread Steam message",
+        > 99 => $"{LaunchIdentityLabel} — 99 or more unread Steam messages",
+        _ => $"{LaunchIdentityLabel} — {UnreadCount} unread Steam messages"
+    };
+
     public string AccentHex => Profile.AccentHex;
 
     public string Initial => string.IsNullOrWhiteSpace(DisplayName)
@@ -77,6 +85,7 @@ public sealed class AccountViewModel : ObservableObject
             {
                 OnPropertyChanged(nameof(UnreadLabel));
                 OnPropertyChanged(nameof(HasUnread));
+                OnPropertyChanged(nameof(AutomationName));
             }
         }
     }
@@ -108,6 +117,7 @@ public sealed class AccountViewModel : ObservableObject
         OnPropertyChanged(nameof(DisplayName));
         OnPropertyChanged(nameof(SteamLoginName));
         OnPropertyChanged(nameof(LaunchIdentityLabel));
+        OnPropertyChanged(nameof(AutomationName));
         OnPropertyChanged(nameof(AccentHex));
         OnPropertyChanged(nameof(Initial));
     }

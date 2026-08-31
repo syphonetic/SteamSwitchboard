@@ -236,17 +236,8 @@ try {
     $packageRoot = Join-Path $resolvedExtract $expectedRootName
     $executable = Join-Path $packageRoot 'SteamSwitchboard.exe'
     $applicationDll = Join-Path $packageRoot 'SteamSwitchboard.dll'
-
-    $pdbCount = @(Get-ChildItem -LiteralPath $packageRoot -Filter '*.pdb' -File -Recurse).Count
-    if ($pdbCount -ne 0) {
-        throw 'The package contains debug symbol files.'
-    }
-
-    $version = (Get-Item -LiteralPath $executable).VersionInfo.ProductVersion
-    if ([string]::IsNullOrWhiteSpace($version) `
-        -or -not $version.StartsWith($ExpectedVersion, [System.StringComparison]::Ordinal)) {
-        throw "The packaged version '$version' does not match '$ExpectedVersion'."
-    }
+    $notificationLogo = Join-Path $packageRoot (
+        'Assets\Branding\SteamSwitchboard-app-logo.png')
 
     $drawingAssembly = if ($PSVersionTable.PSEdition -eq 'Desktop') {
         'System.Drawing'
@@ -255,6 +246,38 @@ try {
         'System.Drawing.Common'
     }
     Add-Type -AssemblyName $drawingAssembly
+
+    $notificationLogoHash = (
+        Get-FileHash -LiteralPath $notificationLogo -Algorithm SHA256).Hash
+    if ($notificationLogoHash -cne (
+            'B684FFBB817F43B3992B44D06EAA04DBFCADFA4CBDD1F2A86572317F4FB59993')) {
+        throw 'The packaged notification logo does not match the reviewed SteamSwitchboard artwork.'
+    }
+    $notificationLogoImage = [System.Drawing.Image]::FromFile($notificationLogo)
+    try {
+        if ($notificationLogoImage.Width -ne 512 `
+            -or $notificationLogoImage.Height -ne 512) {
+            throw 'The packaged notification logo has unexpected dimensions.'
+        }
+        $notificationLogoSize = "$($notificationLogoImage.Width)x$($notificationLogoImage.Height)"
+    }
+    finally {
+        $notificationLogoImage.Dispose()
+    }
+
+    $pdbCount = @(Get-ChildItem -LiteralPath $packageRoot -Filter '*.pdb' -File -Recurse).Count
+    if ($pdbCount -ne 0) {
+        throw 'The package contains debug symbol files.'
+    }
+
+    $version = (Get-Item -LiteralPath $executable).VersionInfo.ProductVersion
+    if ([string]::IsNullOrWhiteSpace($version) `
+        -or -not (Test-ReleaseProductVersion `
+            -ProductVersion $version `
+            -ExpectedVersion $ExpectedVersion)) {
+        throw "The packaged version '$version' does not match '$ExpectedVersion'."
+    }
+
     $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($executable)
     try {
         if ($null -eq $icon -or $icon.Width -lt 16 -or $icon.Height -lt 16) {
@@ -293,6 +316,7 @@ try {
         Sha256 = $actualHash
         ExecutableVersion = $version
         EmbeddedIcon = $iconSize
+        NotificationLogo = $notificationLogoSize
         SignatureStatus = [string]$signature.Status
         RequiredSignature = [bool]$RequireSignature
     }

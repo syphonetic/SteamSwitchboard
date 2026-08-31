@@ -4,7 +4,7 @@ Validation is split into deterministic automated checks, adversarial release tes
 
 ## Automated suite
 
-The Release suite contains **155 passing tests** covering:
+The Release suite contains **161 passing tests** covering:
 
 - VDF comments, escapes, bare tokens, malformed objects, duplicate keys, exact/over-limit tokens, file-size limits, depth limits, and cancellation;
 - Unicode normalisation, control/bidirectional-character rejection, Steam-login syntax, duplicate login/profile IDs, and colour validation;
@@ -16,7 +16,7 @@ The Release suite contains **155 passing tests** covering:
 - every launch-policy state, exact `steam://run/<AppID>` process argument, cancellation before final native invocation, temporally separated stable SteamID/process checks, unknown/mismatched accounts, untrusted executables, a changed process identity, and an executable that changes after assessment;
 - exact Steam Chat/login navigation routes, host/path/port/userinfo/lookalike rejection, URI length limits, host-cancelled/stale navigation-completion suppression, direct-user external-link gating, visible user-initiated microphone policy, exact-origin notification acceptance, raw notification-size rejection, replacement/fallback lifecycle, hostile notification-text sanitisation, and untrusted-origin rejection;
 - privacy-safe log records, bounded rotation, and single-instance mutual exclusion; and
-- selection/removal regressions, browser and Windows-cleanup marker lifecycles, detached cleanup after account removal, generation-aware cleanup-save rollback, immutable state snapshots, corrupt-state warning retention, truthful open/sleep/dormant status wording, persisted-setting binding refresh, launch-action enablement restoration, account-scoped unread state, preview redaction, bounded/non-persistent in-app notification history, opaque modern replacement tags, bounded profile/live-notification activation parsing, ordered/drained Windows command execution, generation-barrier coalescing and newer-generation blocking, queued-preview revocation plus atomic submission, stale compatibility-balloon rejection, game filtering, neutral missing-size wording, WPF-dispatcher collection transitions, and physical window clamping for scaled, negative-coordinate, and already-visible monitor layouts.
+- selection/removal regressions, browser and Windows-cleanup marker lifecycles, detached cleanup after account removal, generation-aware cleanup-save rollback, immutable state snapshots, corrupt-state warning retention, truthful open/sleep/dormant status wording, persisted-setting binding refresh, launch-action enablement restoration, account-scoped unread state, saturated multi-account unread-message aggregation and accessible identity/window labels, preview redaction, bounded/non-persistent in-app notification history, branded local notification-image URI validation, remote/reparse/invalid/oversized logo rejection and replacement locking, opaque modern replacement tags, bounded profile/live-notification activation parsing, ordered/drained Windows command execution, generation-barrier coalescing and newer-generation blocking, queued-preview revocation plus atomic submission, stale compatibility-balloon rejection, bounded culture-independent taskbar labels, direct 16-pixel rendering of `1`, `42`, and the capped badge, game filtering, neutral missing-size wording, WPF-dispatcher collection transitions, and physical window clamping for scaled, negative-coordinate, and already-visible monitor layouts.
 
 The ordinary gate runs a disposable empty-cache signer-policy restore followed by normal signed-source/locked NuGet restore, formatting verification, deterministic Release compilation, warnings-as-errors, .NET security diagnostics as errors, and all tests.
 
@@ -27,7 +27,7 @@ The checked-in GitHub workflow adds a mandatory Ubuntu scanner job with pinned S
 On 2026-08-31:
 
 - `dotnet list package --vulnerable --include-transitive --format json`: **0 vulnerable package records**;
-- Semgrep community C# + security-audit configuration: **180 rules, 70 files, 0 findings**;
+- Semgrep community C# + security-audit configuration: **180 rules, 72 files, 0 findings**;
 - Trivy filesystem vulnerability/secret/misconfiguration scan at High/Critical: **0 vulnerabilities, 0 secrets, and no recognised configuration files**; and
 - Release and test NuGet lock files: **0 known vulnerabilities**, with package-source mapping, repository-signature validation, and an exact pinned Microsoft author certificate for the one legacy package that predates repository countersigning.
 
@@ -35,7 +35,7 @@ The baseline all-rules .NET analyzer pass also informed hardening. Its non-secur
 
 ## Release-boundary tests
 
-Every package build performs static validation before publication. The validator verifies one exact checksum/filename record, exact version/root, required application/offline-documentation/branding files, embedded icon, optional Authenticode policy, entry count and expansion size, and absence of PDBs, logs, state, or browser data. It holds the validated archive read-locked through extraction. Before extraction it rejects absolute/traversal paths, backslash ambiguity, alternate-data-stream syntax, reserved Windows device names, trailing-dot/space aliases, symbolic links, and case-insensitive collisions.
+Every package build performs static validation before publication. The validator verifies one exact checksum/filename record, exact bounded semantic product version with an optional bounded and absolutely anchored build-metadata suffix, exact archive root, required application/offline-documentation/branding files, embedded executable icon, exact reviewed 512×512 notification-logo bytes, optional Authenticode policy, entry count and expansion size, and absence of PDBs, logs, state, or browser data. It holds the validated archive read-locked through extraction. Before extraction it rejects absolute/traversal paths, backslash ambiguity, alternate-data-stream syntax, reserved Windows device names, trailing-dot/space aliases, symbolic links, and case-insensitive collisions.
 
 The packaging pipeline then mutates disposable archive copies and proves rejection of:
 
@@ -43,8 +43,11 @@ The packaging pipeline then mutates disposable archive copies and proves rejecti
 2. `root/../escape.txt` traversal;
 3. a recomputed-checksum archive containing `leaked.pdb`;
 4. a case-colliding `readme.MD`;
-5. a high-ratio compressed entry intended to amplify extraction resources; and
-6. an unsigned archive when signature enforcement is requested.
+5. altered notification artwork despite a recomputed archive checksum;
+6. a high-ratio compressed entry intended to amplify extraction resources; and
+7. an unsigned archive when signature enforcement is requested.
+
+Every mutated fixture keeps the canonical checksum filename and recomputes its digest, then must fail with the scenario-specific rejection reason. This prevents an unrelated early checksum-name failure from masquerading as coverage of the malicious payload.
 
 Archive entries are sorted and use a fixed timestamp. Source file modification times therefore do not affect the ZIP. Public reproducibility still depends on using the same pinned SDK/runtime inputs and clean source snapshot.
 
@@ -61,7 +64,7 @@ Observed during this pass:
 
 - The installed `steam.exe` produced a valid Windows trust result and exact publisher name `Valve Corp.`; an unsigned fixture was rejected.
 - The normal-privilege app started without clipping at 144-DPI, exposed the expected title and associated generated icon, detected 58 local Steam library entries, and settled into the beginner first-run state.
-- The repeatable `scripts/test-ui-regression.ps1` harness created two disposable profiles, forced the selected profile's first browser initialization to time out, activated the visible Reconnect action, and proved a fresh session recovered. It also proved the shell enabled and accepted Chats/Settings navigation within one second, exposed the current page to UI Automation, rendered a three-DIP accent selection marker, preserved selected-before-background browser startup ordering, kept the physical window wholly inside its 3840×2088 work area, moved both profiles out of the bounded starting state, decoded the exact 512×512 generated logo, applied generated bitmap branding to the native window, mathematically centred the nickname/card without Edit overlap, and measured a **0.11%** near-white pixel ratio in the real composed account sidebar. That HWND-level pixel assertion detects the reported white WebView overpaint; all disposable browser data and processes were removed afterwards. The harness project is compiled by the normal/CI solution gate, while its composed-screen run is intentionally a documented interactive-Windows check rather than a headless CI step.
+- The repeatable `scripts/test-ui-regression.ps1` harness created two disposable profiles, forced the selected profile's first browser initialization to time out, activated the visible Reconnect action, and proved a fresh session recovered. It also proved the shell enabled and accepted Chats/Settings navigation within one second, exposed the current page and dynamic unread account/alert labels to UI Automation, rendered a three-DIP accent selection marker, preserved selected-before-background browser startup ordering, kept the physical window wholly inside its 3840×2088 work area, moved both profiles out of the bounded starting state, decoded the exact 512×512 generated logo, applied generated bitmap branding to the native window and compatibility notification icon, exercised numbered taskbar-overlay appearance/read-state clearing without conflating cleared alert history, mathematically centred the nickname/card without Edit overlap, and measured a **0.11%** near-white pixel ratio in the real composed account sidebar. That HWND-level pixel assertion detects the reported white WebView overpaint; all disposable browser data and processes were removed afterwards. The harness project is compiled by the normal/CI solution gate, while its composed-screen run is intentionally a documented interactive-Windows check rather than a headless CI step.
 - The opt-in `--notification-smoke` variant kept input responsive while notification support loaded on a worker, recovered cleanly from this host's missing modern App SDK Singleton broker, submitted the compatibility Windows test alert through the real Settings button, verified the user-facing delivery status, and cleared the alert before exit. The same harness accepts and cleans the modern path on hosts where `AppNotificationManager.IsSupported()` succeeds.
 - The self-contained 1.0.0 ZIP passed checksum, pre-extraction path validation, version/icon/no-PDB/no-session-data assertions, and adversarial validator tests.
 - A baseline packaged process remained healthy through startup, then closed normally. Its disposable extraction and test-data directories were removed, with zero processes remaining. The final feature package was not process-smoked on this host because an older user-owned SteamSwitchboard instance and its real `%LOCALAPPDATA%` state were deliberately left untouched; the exact final ZIP instead receives deterministic WPF rendering plus static and adversarial package validation.
@@ -86,7 +89,7 @@ Three read-only reviews separately examined browser/session isolation, native/lo
 - persisted-setting/startup-event, re-entrant selected-item binding, launch-button binding loss, and constrained/accessibility defects → flat one-way profile presentation, explicit sidebar synchronization, ViewModel-owned launch enablement, an interactive shell before browser startup, selected-visible/background-hidden WebView layout, bounded serial profile warm-up, per-monitor native bounds clamping, adaptive scrolling/resizing, truthful 512-profile/library wording, a high-contrast selected marker, generated title/dialog branding, current-page automation state, truthful native states, and login-disambiguated accessibility names;
 - cancelled/stale navigation, hidden-media, delayed-suspension, missing-runtime, and retry defects → navigation-ID correlation, media teardown on genuine failure, presentation-generation rechecks, account-scoped runtime/folder errors, idempotent event attachment, and fresh-session reconnect;
 - clean-runner signer/test nondeterminism → exact legacy author certificate, empty-cache restore with metadata reset, and STA Dispatcher-hosted ViewModel initialization tests; and
-- report-only release checks → enforced archive assertions, malicious fixtures, signed NuGet policy, static scanners, and deterministic ZIP metadata.
+- report-only and false-positive release checks → enforced archive assertions, canonical-name malicious fixtures with scenario-specific rejection assertions, bounded exact product-version matching, exact reviewed notification-artwork validation, signed NuGet policy, static scanners, and deterministic ZIP metadata.
 
 ## Three final product-review passes
 

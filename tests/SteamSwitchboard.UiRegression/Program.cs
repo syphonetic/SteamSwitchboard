@@ -219,6 +219,7 @@ internal static class Program
 
                 ValidateInteractiveShell(window, viewModel);
                 ValidateProfileIdentityAndBranding(window);
+                ValidateTaskbarUnreadBadge(window, viewModel);
                 SaveComposedWindow(window, screenshotPath);
                 ValidateAccountSidebarIsNotOverpainted(window);
                 inputValidated = true;
@@ -543,6 +544,12 @@ internal static class Program
                 "The generated SteamSwitchboard icon was not applied to the window.");
         }
 
+        if (!window.UsesPackagedBrandNotificationIconForValidation)
+        {
+            throw new InvalidOperationException(
+                "The compatibility notification icon did not use the packaged SteamSwitchboard artwork.");
+        }
+
         if (!string.IsNullOrEmpty(
                 System.Windows.Automation.AutomationProperties.GetName(logo)))
         {
@@ -586,7 +593,86 @@ internal static class Program
         }
 
         Console.WriteLine(
-            "Profile centering, selected marker, accessible navigation, and generated branding: PASS");
+            "Profile centering, selected marker, accessible navigation, and generated window/notification branding: PASS");
+    }
+
+    private static void ValidateTaskbarUnreadBadge(
+        MainWindow window,
+        MainViewModel viewModel)
+    {
+        var taskbar = window.TaskbarItemInfo
+            ?? throw new InvalidOperationException(
+                "The taskbar status integration was not created.");
+        if (taskbar.Overlay is not null)
+        {
+            throw new InvalidOperationException(
+                "The taskbar unread badge was visible without unread messages.");
+        }
+
+        var account = viewModel.Accounts[0];
+        account.UnreadCount = 1;
+        _ = viewModel.AddNotification(
+            account,
+            new ChatNotificationPayload(
+                "Badge validation",
+                "Message content remains private",
+                DateTimeOffset.UtcNow));
+        window.UpdateLayout();
+        if (taskbar.Overlay is not { IsFrozen: true }
+            || !taskbar.Description.Contains(
+                "1 unread Steam message",
+                StringComparison.Ordinal)
+            || !window.Title.Contains(
+                "1 unread message",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The taskbar unread badge did not mirror notification state.");
+        }
+
+        var accountList = (WpfListBox?)window.FindName("AccountList")
+            ?? throw new InvalidOperationException(
+                "The account list was not found for unread accessibility validation.");
+        if (accountList.ItemContainerGenerator.ContainerFromItem(account)
+                is not ListBoxItem accountItem
+            || !System.Windows.Automation.AutomationProperties.GetName(accountItem)
+                .Contains("1 unread Steam message", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The account unread count was not exposed to UI Automation.");
+        }
+
+        var notificationsButton = (WpfButton?)window.FindName("NotificationsButton")
+            ?? throw new InvalidOperationException(
+                "The Notifications button was not found for accessibility validation.");
+        if (!System.Windows.Automation.AutomationProperties.GetName(
+                notificationsButton)
+            .Contains("1 unread alert", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The unread-alert count was not exposed to UI Automation.");
+        }
+
+        viewModel.ClearNotifications();
+        if (taskbar.Overlay is null)
+        {
+            throw new InvalidOperationException(
+                "Clearing alert history incorrectly cleared the unread-message badge.");
+        }
+
+        account.UnreadCount = 0;
+        if (taskbar.Overlay is not null
+            || !taskbar.Description.Contains(
+                "no unread Steam messages",
+                StringComparison.Ordinal)
+            || window.Title.Contains("unread message", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The taskbar unread badge did not clear after messages were read.");
+        }
+
+        Console.WriteLine(
+            "Numeric taskbar unread-message badge and accessible status lifecycle: PASS");
     }
 
     private static void SaveComposedWindow(Window window, string outputPath)

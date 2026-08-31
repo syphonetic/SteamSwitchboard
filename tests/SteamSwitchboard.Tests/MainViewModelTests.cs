@@ -341,6 +341,43 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task UnreadMessageCount_AggregatesAccountsAndSaturatesSafely()
+    {
+        using var temporary = new TemporaryDirectory();
+        var viewModel = new MainViewModel(
+            new StateStore(System.IO.Path.Combine(temporary.Path, "state.json")),
+            new SteamInstallationService(),
+            new SteamLibraryService());
+        var first = await viewModel.AddAccountAsync(new AccountProfile
+        {
+            DisplayName = "First",
+            SteamLoginName = "first"
+        });
+        var second = await viewModel.AddAccountAsync(new AccountProfile
+        {
+            DisplayName = "Second",
+            SteamLoginName = "second"
+        });
+
+        first.UnreadCount = 70;
+        second.UnreadCount = 40;
+
+        Assert.AreEqual(100, viewModel.UnreadMessageCount);
+        Assert.AreEqual("99+", viewModel.UnreadMessageCountLabel);
+        StringAssert.Contains(viewModel.WindowTitle, "99+ unread messages");
+        StringAssert.Contains(first.AutomationName, "70 unread Steam messages");
+
+        await viewModel.RemoveAccountAsync(second);
+        Assert.AreEqual(70, viewModel.UnreadMessageCount);
+
+        first.UnreadCount = 0;
+        Assert.AreEqual(0, viewModel.UnreadMessageCount);
+        Assert.AreEqual(
+            "SteamSwitchboard — unofficial Steam companion",
+            viewModel.WindowTitle);
+    }
+
+    [TestMethod]
     public async Task NotificationHistory_IsMemoryOnlyAndBounded()
     {
         using var temporary = new TemporaryDirectory();

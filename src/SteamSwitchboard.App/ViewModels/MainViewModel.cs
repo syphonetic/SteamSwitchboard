@@ -25,6 +25,7 @@ public enum NativeSteamAccountState
 public sealed class MainViewModel : ObservableObject
 {
     private const int MaximumNotificationHistory = 100;
+    private const int MaximumReportedUnreadMessages = 100;
 
     private readonly StateStore _stateStore;
     private readonly SteamInstallationService _steamInstallation;
@@ -190,6 +191,27 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    private void ObserveAccount(AccountViewModel account)
+    {
+        account.PropertyChanged += OnAccountUnreadPropertyChanged;
+    }
+
+    private void StopObservingAccount(AccountViewModel account)
+    {
+        account.PropertyChanged -= OnAccountUnreadPropertyChanged;
+    }
+
+    private void OnAccountUnreadPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(e.PropertyName)
+            || e.PropertyName == nameof(AccountViewModel.UnreadCount))
+        {
+            RaiseUnreadMessageStateChanged();
+        }
+    }
+
     public bool HasAccounts => Accounts.Count > 0;
 
     public bool HasGames => Games.Count > 0;
@@ -203,6 +225,45 @@ public sealed class MainViewModel : ObservableObject
     public string NotificationCountLabel => NotificationCount > 99
         ? "99+"
         : NotificationCount.ToString();
+
+    public string NotificationButtonAutomationName => NotificationCount switch
+    {
+        0 => "Open chat notifications — none unread",
+        1 => "Open chat notifications — 1 unread alert",
+        > 99 => "Open chat notifications — 99 or more unread alerts",
+        _ => $"Open chat notifications — {NotificationCount} unread alerts"
+    };
+
+    public int UnreadMessageCount
+    {
+        get
+        {
+            var total = 0;
+            foreach (var account in Accounts)
+            {
+                if (account.UnreadCount >= MaximumReportedUnreadMessages - total)
+                {
+                    return MaximumReportedUnreadMessages;
+                }
+
+                total += account.UnreadCount;
+            }
+
+            return total;
+        }
+    }
+
+    public string UnreadMessageCountLabel => UnreadMessageCount > 99
+        ? "99+"
+        : UnreadMessageCount.ToString();
+
+    public string WindowTitle => UnreadMessageCount switch
+    {
+        0 => "SteamSwitchboard — unofficial Steam companion",
+        1 => "(1 unread message) SteamSwitchboard — unofficial Steam companion",
+        > 99 => "(99+ unread messages) SteamSwitchboard — unofficial Steam companion",
+        _ => $"({UnreadMessageCount} unread messages) SteamSwitchboard — unofficial Steam companion"
+    };
 
     public AppSection SelectedSection
     {
@@ -405,10 +466,16 @@ public sealed class MainViewModel : ObservableObject
 
             RaiseSettingsStateChanged();
 
+            foreach (var account in Accounts)
+            {
+                StopObservingAccount(account);
+            }
             Accounts.Clear();
             foreach (var account in _state.Accounts.OrderByDescending(item => item.LastUsedUtc))
             {
-                Accounts.Add(new AccountViewModel(account));
+                var accountViewModel = new AccountViewModel(account);
+                ObserveAccount(accountViewModel);
+                Accounts.Add(accountViewModel);
             }
 
             SelectedAccount = Accounts.FirstOrDefault(account => account.Id == _state.LastSelectedAccountId)
@@ -458,6 +525,7 @@ public sealed class MainViewModel : ObservableObject
         _state.Accounts.Add(profile);
         _state.LastSelectedAccountId = profile.Id;
         var viewModel = new AccountViewModel(profile);
+        ObserveAccount(viewModel);
         Accounts.Insert(0, viewModel);
         SelectedAccount = viewModel;
         if (previousPlayAccount is null)
@@ -471,6 +539,7 @@ public sealed class MainViewModel : ObservableObject
         catch
         {
             Accounts.Remove(viewModel);
+            StopObservingAccount(viewModel);
             _state.Accounts.Remove(profile);
             SelectedAccount = previousSelected;
             _state.LastSelectedAccountId = previousSelectedId;
@@ -505,6 +574,7 @@ public sealed class MainViewModel : ObservableObject
         var pendingWasPresent = _state.PendingBrowserProfileDeletionIds.Remove(account.Id);
         OnPropertyChanged(nameof(IsSelectedAccountPendingDeletion));
         Accounts.Remove(account);
+        StopObservingAccount(account);
         var removedProfile = _state.Accounts[stateIndex];
         _state.Accounts.RemoveAt(stateIndex);
         if (wasSelected || SelectedAccount is null)
@@ -528,6 +598,7 @@ public sealed class MainViewModel : ObservableObject
         {
             _state.Accounts.Insert(stateIndex, removedProfile);
             Accounts.Insert(accountIndex, account);
+            ObserveAccount(account);
             if (pendingWasPresent)
             {
                 _state.PendingBrowserProfileDeletionIds.Add(account.Id);
@@ -1037,6 +1108,14 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(HasAccounts));
         OnPropertyChanged(nameof(HasGames));
         OnPropertyChanged(nameof(DataSummary));
+        RaiseUnreadMessageStateChanged();
+    }
+
+    private void RaiseUnreadMessageStateChanged()
+    {
+        OnPropertyChanged(nameof(UnreadMessageCount));
+        OnPropertyChanged(nameof(UnreadMessageCountLabel));
+        OnPropertyChanged(nameof(WindowTitle));
     }
 
     private void RemoveNotificationsForAccount(Guid accountId)
@@ -1059,6 +1138,7 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(HasUnreadNotifications));
         OnPropertyChanged(nameof(NotificationCount));
         OnPropertyChanged(nameof(NotificationCountLabel));
+        OnPropertyChanged(nameof(NotificationButtonAutomationName));
     }
 
     private void RaiseSettingsStateChanged()

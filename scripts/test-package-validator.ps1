@@ -12,6 +12,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'path-utils.ps1')
 
 $archive = (Resolve-Path -LiteralPath $ArchivePath).Path
 $checksum = (Resolve-Path -LiteralPath $ChecksumPath).Path
@@ -45,7 +46,7 @@ function Write-TestChecksum {
     $sidecar = "$Path.sha256"
     [System.IO.File]::WriteAllText(
         $sidecar,
-        "$hash  $([System.IO.Path]::GetFileName($Path))$([Environment]::NewLine)",
+        "$hash  $packageRootName.zip$([Environment]::NewLine)",
         [System.Text.UTF8Encoding]::new($false))
     return $sidecar
 }
@@ -54,10 +55,11 @@ function Assert-ValidatorRejects {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$Sidecar,
-        [Parameter(Mandatory)][string]$Scenario
+        [Parameter(Mandatory)][string]$Scenario,
+        [Parameter(Mandatory)][string]$ExpectedMessagePattern
     )
 
-    $wasRejected = $false
+    $rejectionMessage = $null
     try {
         & $validator `
             -ArchivePath $Path `
@@ -65,15 +67,50 @@ function Assert-ValidatorRejects {
             -ExpectedVersion $ExpectedVersion | Out-Null
     }
     catch {
-        $wasRejected = $true
+        $rejectionMessage = $_.Exception.Message
     }
-    if (-not $wasRejected) {
+    if ([string]::IsNullOrWhiteSpace($rejectionMessage)) {
         throw "The package validator accepted a malicious $Scenario fixture."
+    }
+    if (-not [System.Text.RegularExpressions.Regex]::IsMatch(
+            $rejectionMessage,
+            $ExpectedMessagePattern,
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+        throw "The package validator rejected the $Scenario fixture for the wrong reason: $rejectionMessage"
     }
 }
 
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 try {
+    foreach ($validVersion in @(
+            '1.0.0',
+            '1.0.0+ABCDEF012345',
+            '1.0.0+build.42')) {
+        if (-not (Test-ReleaseProductVersion `
+                -ProductVersion $validVersion `
+                -ExpectedVersion '1.0.0')) {
+            throw "The release-version validator rejected '$validVersion'."
+        }
+    }
+    if (-not (Test-ReleaseProductVersion `
+            -ProductVersion '1.0.0-rc.1+build.42' `
+            -ExpectedVersion '1.0.0-rc.1')) {
+        throw 'The release-version validator rejected prerelease build metadata.'
+    }
+    foreach ($invalidVersion in @(
+            '1.0.01',
+            '1.0.0-malformed',
+            '1.0.0+',
+            '1.0.0+build..42',
+            "1.0.0+build$([Environment]::NewLine)",
+            ("1.0.0+" + ('a' * 129)))) {
+        if (Test-ReleaseProductVersion `
+                -ProductVersion $invalidVersion `
+                -ExpectedVersion '1.0.0') {
+            throw "The release-version validator accepted '$invalidVersion'."
+        }
+    }
+
     $misnamedChecksum = Join-Path $resolvedTestRoot 'misnamed.sha256'
     $baselineHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
     [System.IO.File]::WriteAllText(
@@ -83,7 +120,8 @@ try {
     Assert-ValidatorRejects `
         -Path $archive `
         -Sidecar $misnamedChecksum `
-        -Scenario 'misnamed-checksum'
+        -Scenario 'misnamed-checksum' `
+        -ExpectedMessagePattern 'checksum file is malformed'
 
     $traversalArchive = Join-Path $resolvedTestRoot 'traversal.zip'
     $traversalStream = [System.IO.File]::Open(
@@ -113,7 +151,8 @@ try {
     Assert-ValidatorRejects `
         -Path $traversalArchive `
         -Sidecar $traversalChecksum `
-        -Scenario 'path traversal'
+        -Scenario 'path traversal' `
+        -ExpectedMessagePattern 'unsafe path|unexpected root'
 
     $debugArchive = Join-Path $resolvedTestRoot 'debug-data.zip'
     Copy-Item -LiteralPath $archive -Destination $debugArchive
@@ -144,7 +183,8 @@ try {
     Assert-ValidatorRejects `
         -Path $debugArchive `
         -Sidecar $debugChecksum `
-        -Scenario 'debug-data'
+        -Scenario 'debug-data' `
+        -ExpectedMessagePattern 'debug output|local session data'
 
     $duplicateArchive = Join-Path $resolvedTestRoot 'duplicate.zip'
     Copy-Item -LiteralPath $archive -Destination $duplicateArchive
@@ -175,7 +215,46 @@ try {
     Assert-ValidatorRejects `
         -Path $duplicateArchive `
         -Sidecar $duplicateChecksum `
-        -Scenario 'case-colliding path'
+        -Scenario 'case-colliding path' `
+        -ExpectedMessagePattern 'unsafe or duplicate entry name'
+
+    $alteredLogoArchive = Join-Path $resolvedTestRoot 'altered-notification-logo.zip'
+    Copy-Item -LiteralPath $archive -Destination $alteredLogoArchive
+    $alteredLogoStream = [System.IO.File]::Open(
+        $alteredLogoArchive,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None)
+    $alteredLogoZip = [System.IO.Compression.ZipArchive]::new(
+        $alteredLogoStream,
+        [System.IO.Compression.ZipArchiveMode]::Update,
+        $false)
+    try {
+        $logoEntryName = "$packageRootName/Assets/Branding/SteamSwitchboard-app-logo.png"
+        $logoEntry = $alteredLogoZip.GetEntry($logoEntryName)
+        if ($null -eq $logoEntry) {
+            throw 'The baseline package has no notification logo fixture.'
+        }
+        $logoEntry.Delete()
+        $replacement = $alteredLogoZip.CreateEntry($logoEntryName)
+        $writer = [System.IO.StreamWriter]::new($replacement.Open())
+        try {
+            $writer.Write('unreviewed replacement artwork')
+        }
+        finally {
+            $writer.Dispose()
+        }
+    }
+    finally {
+        $alteredLogoZip.Dispose()
+        $alteredLogoStream.Dispose()
+    }
+    $alteredLogoChecksum = Write-TestChecksum -Path $alteredLogoArchive
+    Assert-ValidatorRejects `
+        -Path $alteredLogoArchive `
+        -Sidecar $alteredLogoChecksum `
+        -Scenario 'altered notification logo' `
+        -ExpectedMessagePattern 'does not match the reviewed SteamSwitchboard artwork'
 
     $compressionArchive = Join-Path $resolvedTestRoot 'compression-bomb.zip'
     Copy-Item -LiteralPath $archive -Destination $compressionArchive
@@ -211,10 +290,11 @@ try {
     Assert-ValidatorRejects `
         -Path $compressionArchive `
         -Sidecar $compressionChecksum `
-        -Scenario 'resource-amplification'
+        -Scenario 'resource-amplification' `
+        -ExpectedMessagePattern 'suspiciously compressed entry'
 
     if ($baseline.SignatureStatus -ne 'Valid') {
-        $signatureWasRejected = $false
+        $signatureRejectionMessage = $null
         try {
             & $validator `
                 -ArchivePath $archive `
@@ -223,10 +303,13 @@ try {
                 -RequireSignature | Out-Null
         }
         catch {
-            $signatureWasRejected = $true
+            $signatureRejectionMessage = $_.Exception.Message
         }
-        if (-not $signatureWasRejected) {
+        if ([string]::IsNullOrWhiteSpace($signatureRejectionMessage)) {
             throw 'The package validator accepted an unsigned package when a signature was required.'
+        }
+        if ($signatureRejectionMessage -notmatch 'signature') {
+            throw "Signature enforcement failed for the wrong reason: $signatureRejectionMessage"
         }
     }
 }

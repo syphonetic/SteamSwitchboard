@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using SteamSwitchboard.Services;
 
 namespace SteamSwitchboard.Tests;
@@ -5,6 +6,149 @@ namespace SteamSwitchboard.Tests;
 [TestClass]
 public sealed class WindowsAppNotificationServiceTests
 {
+    private static readonly byte[] PngSignature =
+        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+    [TestMethod]
+    public void AppLogoUri_UsesThePackagedPngAsAnAbsoluteLocalFile()
+    {
+        using var temporary = new TemporaryDirectory();
+        var logoDirectory = temporary.CreateDirectory(
+            "Assets",
+            "Branding");
+        var logoPath = Path.Combine(
+            logoDirectory,
+            "SteamSwitchboard-app-logo.png");
+        var packagedLogoPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Assets",
+            "Branding",
+            "SteamSwitchboard-app-logo.png");
+        File.Copy(packagedLogoPath, logoPath);
+
+        var opened = WindowsAppNotificationService.TryOpenAppLogo(
+            temporary.Path,
+            out var uri,
+            out var readLease);
+
+        Assert.IsTrue(opened);
+        Assert.IsNotNull(uri);
+        Assert.IsTrue(uri.IsFile);
+        Assert.AreEqual(Path.GetFullPath(logoPath), uri.LocalPath);
+        Assert.IsNotNull(readLease);
+        using (readLease)
+        {
+            Assert.ThrowsExactly<IOException>(() =>
+            {
+                using var writer = new FileStream(
+                    logoPath,
+                    FileMode.Open,
+                    FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete);
+            });
+        }
+
+        using var service = new WindowsAppNotificationService(temporary.Path);
+        Assert.ThrowsExactly<IOException>(() =>
+        {
+            using var writer = new FileStream(
+                logoPath,
+                FileMode.Open,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+        });
+        service.Dispose();
+        using var releasedWriter = new FileStream(
+            logoPath,
+            FileMode.Open,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete);
+    }
+
+    [TestMethod]
+    public void AppLogoUri_FailsClosedForMissingInvalidOrOversizedAssets()
+    {
+        using var temporary = new TemporaryDirectory();
+        Assert.IsFalse(WindowsAppNotificationService.TryOpenAppLogo(
+            temporary.Path,
+            out _,
+            out _));
+        Assert.IsFalse(WindowsAppNotificationService.TryOpenAppLogo(
+            @"\\attacker.invalid\share\SteamSwitchboard",
+            out _,
+            out _));
+
+        var logoDirectory = temporary.CreateDirectory(
+            "Assets",
+            "Branding");
+        var logoPath = Path.Combine(
+            logoDirectory,
+            "SteamSwitchboard-app-logo.png");
+        File.WriteAllBytes(logoPath, []);
+        Assert.IsFalse(WindowsAppNotificationService.TryOpenAppLogo(
+            temporary.Path,
+            out _,
+            out _));
+
+        File.WriteAllText(logoPath, "not a PNG");
+        Assert.IsFalse(WindowsAppNotificationService.TryOpenAppLogo(
+            temporary.Path,
+            out _,
+            out _));
+
+        using (var oversized = new FileStream(
+                   logoPath,
+                   FileMode.Create,
+                   FileAccess.Write,
+                   FileShare.None))
+        {
+            oversized.Write(PngSignature);
+            oversized.SetLength((1024 * 1024) + 1);
+        }
+        Assert.IsFalse(WindowsAppNotificationService.TryOpenAppLogo(
+            temporary.Path,
+            out _,
+            out _));
+    }
+
+    [TestMethod]
+    public void AppLogoUri_RejectsReparsePointApplicationDirectories()
+    {
+        using var temporary = new TemporaryDirectory();
+        var target = temporary.CreateDirectory("real-app");
+        var link = Path.Combine(temporary.Path, "linked-app");
+        var startInfo = new ProcessStartInfo(
+            Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("/d");
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("mklink");
+        startInfo.ArgumentList.Add("/J");
+        startInfo.ArgumentList.Add(link);
+        startInfo.ArgumentList.Add(target);
+        using (var process = Process.Start(startInfo))
+        {
+            Assert.IsNotNull(process);
+            Assert.IsTrue(process.WaitForExit(TimeSpan.FromSeconds(5)));
+            Assert.AreEqual(0, process.ExitCode);
+        }
+
+        try
+        {
+            Assert.IsFalse(WindowsAppNotificationService.TryOpenAppLogo(
+                link,
+                out _,
+                out _));
+        }
+        finally
+        {
+            Directory.Delete(link);
+        }
+    }
+
     [TestMethod]
     public void ReplacementTag_IsBoundedOpaqueAndAccountScoped()
     {

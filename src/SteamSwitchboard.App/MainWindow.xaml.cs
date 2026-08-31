@@ -33,6 +33,7 @@ public partial class MainWindow : Window
     private readonly OrderedCommandQueue<WindowsAppNotificationService> _windowsNotificationCommands;
     private readonly NotificationPrivacyGate _notificationPrivacyGate = new();
     private System.Drawing.Icon? _notificationTrayIcon;
+    private bool _notificationTrayIconUsesPackagedBrand;
     private WindowsNotificationDelivery? _activeBalloonNotification;
     private readonly NotificationCleanupGenerationBarrier
         _notificationCleanupBarrier = new();
@@ -45,6 +46,9 @@ public partial class MainWindow : Window
     private int _notificationSettingsRevision;
 
     internal event Action<AccountViewModel>? ChatSessionInitializationStarted;
+
+    internal bool UsesPackagedBrandNotificationIconForValidation =>
+        _notificationTrayIconUsesPackagedBrand;
 
     public MainWindow(
         MainViewModel viewModel,
@@ -94,6 +98,8 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromSeconds(5)
         };
         _playAccountTimer.Tick += (_, _) => UpdateCurrentPlayAccount();
+        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        UpdateTaskbarUnreadBadge();
         NavigateTo(_viewModel.SelectedSection);
     }
 
@@ -1128,23 +1134,31 @@ public partial class MainWindow : Window
 
     private void InitializeNotificationIcon()
     {
+        System.Drawing.Icon? icon = null;
         try
         {
-            var processPath = Environment.ProcessPath;
-            if (string.IsNullOrWhiteSpace(processPath))
+            icon = TryLoadPackagedNotificationIcon();
+            var usesPackagedBrand = icon is not null;
+            if (icon is null)
+            {
+                var processPath = Environment.ProcessPath;
+                if (!string.IsNullOrWhiteSpace(processPath))
+                {
+                    icon = System.Drawing.Icon.ExtractAssociatedIcon(processPath);
+                }
+            }
+
+            if (icon is null)
             {
                 return;
             }
 
-            _notificationTrayIcon = System.Drawing.Icon.ExtractAssociatedIcon(processPath);
-            if (_notificationTrayIcon is null)
-            {
-                return;
-            }
-
-            _notificationIcon.Icon = _notificationTrayIcon;
+            _notificationIcon.Icon = icon;
             _notificationIcon.BalloonTipClicked += OnNotificationBalloonClicked;
             _notificationIcon.DoubleClick += OnNotificationIconDoubleClicked;
+            _notificationTrayIcon = icon;
+            _notificationTrayIconUsesPackagedBrand = usesPackagedBrand;
+            icon = null;
         }
         catch (Exception exception) when (
             exception is ArgumentException
@@ -1153,6 +1167,77 @@ public partial class MainWindow : Window
         {
             // In-app notifications remain available when Windows cannot create a tray icon.
         }
+        finally
+        {
+            icon?.Dispose();
+        }
+    }
+
+    private static System.Drawing.Icon? TryLoadPackagedNotificationIcon()
+    {
+        try
+        {
+            var resource = Application.GetResourceStream(new Uri(
+                "/SteamSwitchboard;component/Assets/SteamSwitchboard.ico",
+                UriKind.Relative));
+            if (resource?.Stream is null)
+            {
+                return null;
+            }
+
+            using (resource.Stream)
+            using (var source = new System.Drawing.Icon(resource.Stream))
+            {
+                return (System.Drawing.Icon)source.Clone();
+            }
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+                or IOException
+                or InvalidOperationException
+                or NotSupportedException
+                or System.Security.SecurityException)
+        {
+            return null;
+        }
+    }
+
+    private void OnViewModelPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs e)
+    {
+        if (_shutdownStarted
+            || (!string.IsNullOrEmpty(e.PropertyName)
+                && e.PropertyName != nameof(MainViewModel.UnreadMessageCount)))
+        {
+            return;
+        }
+
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(UpdateTaskbarUnreadBadge);
+            return;
+        }
+
+        UpdateTaskbarUnreadBadge();
+    }
+
+    private void UpdateTaskbarUnreadBadge()
+    {
+        if (_shutdownStarted || TaskbarItemInfo is null)
+        {
+            return;
+        }
+
+        var unreadCount = Math.Max(0, _viewModel.UnreadMessageCount);
+        TaskbarItemInfo.Overlay = TaskbarUnreadBadge.CreateOverlay(unreadCount);
+        TaskbarItemInfo.Description = unreadCount switch
+        {
+            0 => "SteamSwitchboard — no unread Steam messages",
+            1 => "SteamSwitchboard — 1 unread Steam message",
+            > 99 => "SteamSwitchboard — 99 or more unread Steam messages",
+            _ => $"SteamSwitchboard — {unreadCount} unread Steam messages"
+        };
     }
 
     private void OnChatNotificationReceived(
@@ -2025,6 +2110,13 @@ public partial class MainWindow : Window
         }
 
         _shutdownStarted = true;
+        _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        if (TaskbarItemInfo is not null)
+        {
+            TaskbarItemInfo.Overlay = null;
+            TaskbarItemInfo.Description = "SteamSwitchboard";
+        }
+
         IsEnabled = false;
         _playAccountTimer.Stop();
         _balloonReleaseTimer.Stop();

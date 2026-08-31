@@ -64,3 +64,34 @@ function Move-FileReplacing {
         [System.IO.File]::Move($SourcePath, $DestinationPath)
     }
 }
+
+function Test-ReleaseProductVersion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProductVersion,
+        [Parameter(Mandatory)][string]$ExpectedVersion
+    )
+
+    if ($ProductVersion.Length -gt 128 -or $ExpectedVersion.Length -gt 128) {
+        return $false
+    }
+
+    if ($ProductVersion.Equals(
+            $ExpectedVersion,
+            [System.StringComparison]::Ordinal)) {
+        return $true
+    }
+
+    $metadataPrefix = "$ExpectedVersion+"
+    if (-not $ProductVersion.StartsWith(
+            $metadataPrefix,
+            [System.StringComparison]::Ordinal)) {
+        return $false
+    }
+
+    $metadata = $ProductVersion.Substring($metadataPrefix.Length)
+    return [System.Text.RegularExpressions.Regex]::IsMatch(
+        $metadata,
+        '\A[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*\z',
+        [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+}
