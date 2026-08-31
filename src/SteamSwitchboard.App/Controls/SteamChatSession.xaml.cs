@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -24,10 +23,6 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
         TimeSpan.FromSeconds(15);
 
     private static readonly Uri ChatUri = new("https://steamcommunity.com/chat/");
-    private static readonly Regex UnreadTitlePattern = new(
-        @"^\((?<count>\d+)\)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant,
-        TimeSpan.FromMilliseconds(100));
     private static readonly object GlobalNotificationGate = new();
     private static readonly Queue<DateTimeOffset> GlobalNotificationTimes = [];
     private static DateTimeOffset _globalNotificationCircuitOpenUntil;
@@ -526,21 +521,19 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
             return;
         }
 
-        var match = UnreadTitlePattern.Match(
-            Browser.CoreWebView2.DocumentTitle ?? string.Empty);
-        if (IsWorkspaceVisible())
+        var previousUnread = _account.UnreadCount;
+        var workspaceVisible = IsWorkspaceVisible();
+        var unreadCount = SteamUnreadTitleState.ResolveUnreadCount(
+            Browser.CoreWebView2.DocumentTitle,
+            previousUnread,
+            workspaceVisible);
+        if (workspaceVisible)
         {
             _notificationFallbackTimer.Stop();
-            _account.UnreadCount = 0;
-            return;
         }
 
-        var previousUnread = _account.UnreadCount;
-        _account.UnreadCount = match.Success
-            && int.TryParse(match.Groups["count"].Value, out var count)
-                ? count
-                : 0;
-        if (_account.UnreadCount > previousUnread)
+        _account.UnreadCount = unreadCount;
+        if (!workspaceVisible && unreadCount > previousUnread)
         {
             _notificationFallbackTimer.Stop();
             _notificationFallbackTimer.Start();

@@ -538,10 +538,12 @@ internal static class Program
                 "The generated SteamSwitchboard logo was not decoded into the header.");
         }
 
-        if (window.Icon is not System.Windows.Media.Imaging.BitmapSource)
+        if (window.Icon is not System.Windows.Media.Imaging.BitmapSource
+            { PixelWidth: 512, PixelHeight: 512 }
+            || !ReferenceEquals(window.Icon, logo.Source))
         {
             throw new InvalidOperationException(
-                "The generated SteamSwitchboard icon was not applied to the window.");
+                "The live window did not use the generated SteamSwitchboard logo bitmap.");
         }
 
         if (!window.UsesPackagedBrandNotificationIconForValidation)

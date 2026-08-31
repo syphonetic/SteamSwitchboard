@@ -4,7 +4,7 @@ Validation is split into deterministic automated checks, adversarial release tes
 
 ## Automated suite
 
-The Release suite contains **161 passing tests** covering:
+The Release suite contains **165 passing tests** covering:
 
 - VDF comments, escapes, bare tokens, malformed objects, duplicate keys, exact/over-limit tokens, file-size limits, depth limits, and cancellation;
 - Unicode normalisation, control/bidirectional-character rejection, Steam-login syntax, duplicate login/profile IDs, and colour validation;

@@ -130,6 +130,7 @@ public partial class MainWindow : Window
             bitmap.StreamSource = stream;
             bitmap.EndInit();
             bitmap.Freeze();
+            Icon = bitmap;
             HeaderBrandLogo.Source = bitmap;
             AboutBrandLogo.Source = bitmap;
         }
