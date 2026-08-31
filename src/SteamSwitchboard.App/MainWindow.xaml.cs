@@ -105,42 +105,42 @@ public partial class MainWindow : Window
 
     private void LoadBrandingImages()
     {
-        var logoPath = Path.Combine(
-            AppContext.BaseDirectory,
-            "Assets",
-            "Branding",
-            "SteamSwitchboard-app-logo.png");
-        if (!File.Exists(logoPath))
+        if (!BrandAssetPolicy.TryOpenAppLogoForRendering(
+                AppContext.BaseDirectory,
+                out var logoStream)
+            || logoStream is null)
         {
             return;
         }
 
         try
         {
-            using var stream = new FileStream(
-                logoPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                bufferSize: 4096,
-                FileOptions.SequentialScan);
-            var bitmap = new System.Windows.Media.Imaging.BitmapImage();
-            bitmap.BeginInit();
-            bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-            bitmap.StreamSource = stream;
-            bitmap.EndInit();
-            bitmap.Freeze();
-            Icon = bitmap;
-            HeaderBrandLogo.Source = bitmap;
-            AboutBrandLogo.Source = bitmap;
+            using (logoStream)
+            {
+                var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                bitmap.BeginInit();
+                bitmap.CacheOption =
+                    System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                bitmap.CreateOptions =
+                    System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat;
+                bitmap.DecodePixelWidth = 512;
+                bitmap.StreamSource = logoStream;
+                bitmap.EndInit();
+                bitmap.Freeze();
+                Icon = bitmap;
+                HeaderBrandLogo.Source = bitmap;
+                AboutBrandLogo.Source = bitmap;
+            }
         }
         catch (Exception exception) when (
             exception is IOException
                 or UnauthorizedAccessException
                 or NotSupportedException
+                or InvalidOperationException
+                or ArgumentException
                 or FileFormatException)
         {
-            // Text branding remains usable if a portable install is incomplete.
+            // The compiled icon and text branding remain usable if a portable install is incomplete.
         }
     }
 
@@ -1245,11 +1245,18 @@ public partial class MainWindow : Window
         object? sender,
         ChatNotificationEventArgs e)
     {
+        if (sender is not SteamChatSession session
+            || !ReferenceEquals(session.Account, e.Account))
+        {
+            e.ReportClosed?.Invoke();
+            return;
+        }
+
         if (!Dispatcher.CheckAccess())
         {
             Dispatcher.BeginInvoke(
                 () => HandleChatNotification(
-                    e.Account,
+                    session,
                     e.Notification,
                     e.ReportClicked,
                     e.ReportClosed));
@@ -1257,7 +1264,7 @@ public partial class MainWindow : Window
         }
 
         HandleChatNotification(
-            e.Account,
+            session,
             e.Notification,
             e.ReportClicked,
             e.ReportClosed);
@@ -1266,6 +1273,8 @@ public partial class MainWindow : Window
     private void OnChatReadyWhileVisible(object? sender, EventArgs e)
     {
         if (sender is SteamChatSession session
+            && IsTrackedChatSession(session)
+            && session.IsWorkspaceVisibleForReadState
             && CanMarkSelectedChatRead(session.Account.Id))
         {
             MarkAccountRead(session.Account);
@@ -1312,13 +1321,15 @@ public partial class MainWindow : Window
         }
     }
 
-    private void HandleChatNotification(
-        AccountViewModel account,
+    internal void HandleChatNotification(
+        SteamChatSession session,
         ChatNotificationPayload payload,
         Action? reportClicked,
         Action? reportClosed)
     {
-        if (!_viewModel.Accounts.Contains(account)
+        var account = session.Account;
+        if (!IsTrackedChatSession(session)
+            || !_viewModel.Accounts.Contains(account)
             || _viewModel.IsAccountDeletionPending(account.Id))
         {
             reportClosed?.Invoke();
@@ -1330,16 +1341,18 @@ public partial class MainWindow : Window
             payload,
             reportClicked,
             reportClosed);
-        var conversationIsVisible = IsActive
-            && WindowState != WindowState.Minimized
-            && _viewModel.SelectedSection == AppSection.Chats
+        var isSelectedConversation = _viewModel.SelectedSection == AppSection.Chats
             && ReferenceEquals(_viewModel.SelectedAccount, account);
-        if (!conversationIsVisible)
+        var unreadDecision = ChatUnreadLifecycle.ResolveAfterNotification(
+            account.UnreadCount,
+            isSelectedConversation,
+            session.IsWorkspaceVisibleForReadState);
+        account.UnreadCount = unreadDecision.UnreadCount;
+        if (unreadDecision.ShouldShowWindowsNotification)
         {
-            account.UnreadCount = Math.Max(1, account.UnreadCount);
             ShowWindowsNotification(notification);
         }
-        else
+        else if (unreadDecision.ShouldMarkRead)
         {
             MarkAccountRead(account);
         }
@@ -1347,6 +1360,10 @@ public partial class MainWindow : Window
         _viewModel.StatusMessage =
             $"Steam notification for {account.DisplayName}: {payload.SteamTitle}";
     }
+
+    private bool IsTrackedChatSession(SteamChatSession session) =>
+        _chatSessions.TryGetValue(session.Account.Id, out var tracked)
+        && ReferenceEquals(session, tracked);
 
     private bool CanMarkSelectedChatRead(Guid accountId) =>
         IsActive

@@ -10,16 +10,10 @@ namespace SteamSwitchboard.Services;
 
 public sealed class WindowsAppNotificationService : IDisposable
 {
-    private const int MaximumAppLogoBytes = 1024 * 1024;
     private const string OpenAction = "open";
     private const string AccountArgument = "account";
     private const string NotificationArgument = "notification";
     private const string TestNotificationGroup = "switchboard-tests";
-    private static readonly byte[] ExpectedAppLogoSha256 = Convert.FromHexString(
-        "B684FFBB817F43B3992B44D06EAA04DBFCADFA4CBDD1F2A86572317F4FB59993");
-    private static readonly byte[] PngSignature =
-        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-
     private readonly object _gate = new();
     private readonly Uri? _appLogoUri;
     private readonly FileStream? _appLogoReadLease;
@@ -404,30 +398,13 @@ public sealed class WindowsAppNotificationService : IDisposable
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                bufferSize: PngSignature.Length,
+                bufferSize: 4096,
                 FileOptions.SequentialScan);
-            if (stream.Length is < 8 or > MaximumAppLogoBytes)
+            if (!BrandAssetPolicy.TryValidateAppLogo(stream))
             {
                 return false;
             }
 
-            Span<byte> signature = stackalloc byte[PngSignature.Length];
-            if (stream.Read(signature) != signature.Length
-                || !signature.SequenceEqual(PngSignature))
-            {
-                return false;
-            }
-
-            stream.Position = 0;
-            var actualHash = SHA256.HashData(stream);
-            if (!CryptographicOperations.FixedTimeEquals(
-                    actualHash,
-                    ExpectedAppLogoSha256))
-            {
-                return false;
-            }
-
-            stream.Position = 0;
             appLogoUri = new Uri(path, UriKind.Absolute);
             readLease = stream;
             stream = null;

@@ -97,6 +97,8 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
 
     public AccountViewModel Account => _account;
 
+    internal bool IsWorkspaceVisibleForReadState => IsWorkspaceVisible();
+
     public event EventHandler<ChatNotificationEventArgs>? ChatNotificationReceived;
 
     public event EventHandler? ChatReadyWhileVisible;
@@ -1151,13 +1153,16 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
             $"Profile nickname: {_account.DisplayName}  •  expected Steam login: {_account.SteamLoginName}";
     }
 
-    private bool IsWorkspaceVisible() =>
-        _isPresentedToUser
-        && Opacity > 0
-        && IsVisible
-        && Browser.Visibility == Visibility.Visible
-        && _account.ConnectionState == ChatConnectionState.Ready
-        && Window.GetWindow(this)?.IsActive == true;
+    private bool IsWorkspaceVisible()
+    {
+        var owner = Window.GetWindow(this);
+        return _isPresentedToUser
+            && Opacity > 0
+            && IsVisible
+            && Browser.Visibility == Visibility.Visible
+            && _account.ConnectionState == ChatConnectionState.Ready
+            && owner is { IsActive: true, WindowState: not WindowState.Minimized };
+    }
 
     private void ShowFailure(string message)
     {

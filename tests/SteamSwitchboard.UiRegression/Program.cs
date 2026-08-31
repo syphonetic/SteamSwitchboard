@@ -208,7 +208,6 @@ internal static class Program
         };
         inputTimer.Tick += (_, _) =>
         {
-            inputTimer.Stop();
             try
             {
                 if (started.Elapsed > InputDeadline)
@@ -217,6 +216,12 @@ internal static class Program
                         $"The UI input queue was blocked for {started.Elapsed.TotalSeconds:F1} seconds.");
                 }
 
+                if (!HasLiveChatSession(window))
+                {
+                    return;
+                }
+
+                inputTimer.Stop();
                 ValidateInteractiveShell(window, viewModel);
                 ValidateProfileIdentityAndBranding(window);
                 ValidateTaskbarUnreadBadge(window, viewModel);
@@ -226,6 +231,7 @@ internal static class Program
             }
             catch (Exception exception)
             {
+                inputTimer.Stop();
                 failure = exception;
                 CloseHarness(window);
             }
@@ -611,14 +617,70 @@ internal static class Program
                 "The taskbar unread badge was visible without unread messages.");
         }
 
-        var account = viewModel.Accounts[0];
-        account.UnreadCount = 1;
-        _ = viewModel.AddNotification(
-            account,
+        var sessionContainer = (System.Windows.Controls.Panel?)window.FindName(
+            "ChatSessionContainer")
+            ?? throw new InvalidOperationException(
+                "The chat-session container was not found for unread validation.");
+        var availableSessions = sessionContainer.Children
+            .OfType<SteamChatSession>()
+            .ToArray();
+        var session = availableSessions.FirstOrDefault(candidate =>
+                ReferenceEquals(candidate.Account, viewModel.SelectedAccount))
+            ?? availableSessions.FirstOrDefault()
+            ?? throw new InvalidOperationException(
+                "No live chat session was available for unread validation.");
+        var account = session.Account;
+        var originalSelectedAccount = viewModel.SelectedAccount;
+        var originalSelectedSection = viewModel.SelectedSection;
+        var originalConnectionState = account.ConnectionState;
+        viewModel.SelectedSection = AppSection.Chats;
+        viewModel.SelectedAccount = account;
+        account.ConnectionState = ChatConnectionState.Reconnecting;
+        if (session.IsWorkspaceVisibleForReadState)
+        {
+            throw new InvalidOperationException(
+                "A reconnecting chat was incorrectly considered visible for read state.");
+        }
+
+        var notificationCountBeforeRejectedSource = viewModel.NotificationCount;
+        var unreadBeforeRejectedSource = account.UnreadCount;
+        var rejectedSourceClosed = false;
+        using (var untrackedSession = new SteamChatSession(
+                   account,
+                   Path.Combine(
+                       Path.GetTempPath(),
+                       $"SteamSwitchboard-untracked-{Guid.NewGuid():N}")))
+        {
+            window.HandleChatNotification(
+                untrackedSession,
+                new ChatNotificationPayload(
+                    "Rejected source validation",
+                    "This event must not enter notification state",
+                    DateTimeOffset.UtcNow),
+                reportClicked: null,
+                reportClosed: () => rejectedSourceClosed = true);
+        }
+
+        if (!rejectedSourceClosed
+            || viewModel.NotificationCount != notificationCountBeforeRejectedSource
+            || account.UnreadCount != unreadBeforeRejectedSource)
+        {
+            throw new InvalidOperationException(
+                "An untracked chat session changed unread notification state.");
+        }
+
+        window.HandleChatNotification(
+            session,
             new ChatNotificationPayload(
                 "Badge validation",
                 "Message content remains private",
-                DateTimeOffset.UtcNow));
+                DateTimeOffset.UtcNow),
+            reportClicked: null,
+            reportClosed: null);
+        account.UnreadCount = SteamUnreadTitleState.ResolveUnreadCount(
+            "Steam Community :: Steam Chat",
+            account.UnreadCount,
+            isWorkspaceVisible: false);
         window.UpdateLayout();
         if (taskbar.Overlay is not { IsFrozen: true }
             || !taskbar.Description.Contains(
@@ -673,9 +735,17 @@ internal static class Program
                 "The taskbar unread badge did not clear after messages were read.");
         }
 
+        account.ConnectionState = originalConnectionState;
+        viewModel.SelectedAccount = originalSelectedAccount;
+        viewModel.SelectedSection = originalSelectedSection;
+
         Console.WriteLine(
             "Numeric taskbar unread-message badge and accessible status lifecycle: PASS");
     }
+
+    private static bool HasLiveChatSession(MainWindow window) =>
+        window.FindName("ChatSessionContainer") is System.Windows.Controls.Panel container
+        && container.Children.OfType<SteamChatSession>().Any();
 
     private static void SaveComposedWindow(Window window, string outputPath)
     {

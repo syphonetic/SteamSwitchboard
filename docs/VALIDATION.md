@@ -4,7 +4,7 @@ Validation is split into deterministic automated checks, adversarial release tes
 
 ## Automated suite
 
-The Release suite contains **165 passing tests** covering:
+The Release suite contains **167 passing tests** covering:
 
 - VDF comments, escapes, bare tokens, malformed objects, duplicate keys, exact/over-limit tokens, file-size limits, depth limits, and cancellation;
 - Unicode normalisation, control/bidirectional-character rejection, Steam-login syntax, duplicate login/profile IDs, and colour validation;
@@ -27,7 +27,7 @@ The checked-in GitHub workflow adds a mandatory Ubuntu scanner job with pinned S
 On 2026-08-31:
 
 - `dotnet list package --vulnerable --include-transitive --format json`: **0 vulnerable package records**;
-- Semgrep community C# + security-audit configuration: **180 rules, 72 files, 0 findings**;
+- Semgrep community C# + security-audit configuration: **180 rules, 76 files, 0 findings**;
 - Trivy filesystem vulnerability/secret/misconfiguration scan at High/Critical: **0 vulnerabilities, 0 secrets, and no recognised configuration files**; and
 - Release and test NuGet lock files: **0 known vulnerabilities**, with package-source mapping, repository-signature validation, and an exact pinned Microsoft author certificate for the one legacy package that predates repository countersigning.
 

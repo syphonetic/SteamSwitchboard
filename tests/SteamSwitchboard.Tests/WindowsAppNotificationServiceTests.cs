@@ -116,6 +116,19 @@ public sealed class WindowsAppNotificationServiceTests
     {
         using var temporary = new TemporaryDirectory();
         var target = temporary.CreateDirectory("real-app");
+        var targetBranding = Directory.CreateDirectory(Path.Combine(
+            target,
+            "Assets",
+            "Branding"));
+        File.Copy(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "Assets",
+                "Branding",
+                "SteamSwitchboard-app-logo.png"),
+            Path.Combine(
+                targetBranding.FullName,
+                "SteamSwitchboard-app-logo.png"));
         var link = Path.Combine(temporary.Path, "linked-app");
         var startInfo = new ProcessStartInfo(
             Path.Combine(Environment.SystemDirectory, "cmd.exe"))
@@ -138,6 +151,10 @@ public sealed class WindowsAppNotificationServiceTests
 
         try
         {
+            Assert.IsTrue(BrandAssetPolicy.TryOpenAppLogoForRendering(
+                link,
+                out var renderingLease));
+            renderingLease?.Dispose();
             Assert.IsFalse(WindowsAppNotificationService.TryOpenAppLogo(
                 link,
                 out _,

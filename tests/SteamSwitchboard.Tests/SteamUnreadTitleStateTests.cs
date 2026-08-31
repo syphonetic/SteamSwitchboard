@@ -72,4 +72,49 @@ public sealed class SteamUnreadTitleStateTests
                 83,
                 isWorkspaceVisible: true));
     }
+
+    [TestMethod]
+    public void HiddenNotificationOrdinaryTitleAndVisibleRead_StayInCausalOrder()
+    {
+        var notification = ChatUnreadLifecycle.ResolveAfterNotification(
+            currentUnreadCount: 0,
+            isSelectedConversation: true,
+            isWorkspaceActuallyVisible: false);
+        Assert.AreEqual(1, notification.UnreadCount);
+        Assert.IsFalse(notification.ShouldMarkRead);
+        Assert.IsTrue(notification.ShouldShowWindowsNotification);
+
+        var afterOrdinaryTitle = SteamUnreadTitleState.ResolveUnreadCount(
+            "Steam Community :: Steam Chat",
+            notification.UnreadCount,
+            isWorkspaceVisible: false);
+        Assert.AreEqual(1, afterOrdinaryTitle);
+
+        var afterVisibleRead = SteamUnreadTitleState.ResolveUnreadCount(
+            "Steam Community :: Steam Chat",
+            afterOrdinaryTitle,
+            isWorkspaceVisible: true);
+        Assert.AreEqual(0, afterVisibleRead);
+    }
+
+    [TestMethod]
+    public void SelectedButLoadingWorkspace_DoesNotSuppressUnreadAlert()
+    {
+        var loadingDecision = ChatUnreadLifecycle.ResolveAfterNotification(
+            currentUnreadCount: 9,
+            isSelectedConversation: true,
+            isWorkspaceActuallyVisible: false);
+
+        Assert.AreEqual(9, loadingDecision.UnreadCount);
+        Assert.IsFalse(loadingDecision.ShouldMarkRead);
+        Assert.IsTrue(loadingDecision.ShouldShowWindowsNotification);
+
+        var visibleDecision = ChatUnreadLifecycle.ResolveAfterNotification(
+            currentUnreadCount: loadingDecision.UnreadCount,
+            isSelectedConversation: true,
+            isWorkspaceActuallyVisible: true);
+        Assert.AreEqual(0, visibleDecision.UnreadCount);
+        Assert.IsTrue(visibleDecision.ShouldMarkRead);
+        Assert.IsFalse(visibleDecision.ShouldShowWindowsNotification);
+    }
 }
