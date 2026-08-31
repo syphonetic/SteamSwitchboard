@@ -43,6 +43,7 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
     private bool _disposed;
     private bool _eventsAttached;
     private bool _externalPromptOpen;
+    private bool _hasInteractiveEmbeddedDocument;
     private bool _initializationFailed;
     private bool _isPresentedToUser;
     private bool _keepConnectedWhenHidden = true;
@@ -447,7 +448,8 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
             e.Cancel = true;
             if (SteamNavigationPolicy.ShouldPromptForExternalLink(
                     e.Uri,
-                    e.IsUserInitiated))
+                    e.IsUserInitiated,
+                    HasInteractiveEmbeddedDocument()))
             {
                 OpenExternalWithConfirmation(e.Uri);
             }
@@ -456,6 +458,7 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
         }
 
         _navigationTracker.RecordAllowedNavigation(e.NavigationId);
+        _hasInteractiveEmbeddedDocument = false;
 
         if (SteamNavigationPolicy.IsBootstrapDocument(e.Uri))
         {
@@ -505,6 +508,7 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
         _account.ConnectionState = SteamNavigationPolicy.IsLoginDocument(source)
             ? ChatConnectionState.SignInRequired
             : ChatConnectionState.Ready;
+        _hasInteractiveEmbeddedDocument = true;
         if (_account.ConnectionState == ChatConnectionState.Ready
             && _isPresentedToUser)
         {
@@ -644,7 +648,8 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
         }
         else if (SteamNavigationPolicy.ShouldPromptForExternalLink(
                      e.Uri,
-                     e.IsUserInitiated))
+                     e.IsUserInitiated,
+                     HasInteractiveEmbeddedDocument()))
         {
             OpenExternalWithConfirmation(e.Uri);
         }
@@ -1156,7 +1161,8 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
     private bool IsWorkspaceVisible()
     {
         var owner = Window.GetWindow(this);
-        return _isPresentedToUser
+        return _hasInteractiveEmbeddedDocument
+            && _isPresentedToUser
             && Opacity > 0
             && IsVisible
             && Browser.Visibility == Visibility.Visible
@@ -1164,8 +1170,22 @@ public sealed partial class SteamChatSession : UserControl, IDisposable
             && owner is { IsActive: true, WindowState: not WindowState.Minimized };
     }
 
+    private bool HasInteractiveEmbeddedDocument()
+    {
+        var owner = Window.GetWindow(this);
+        return _hasInteractiveEmbeddedDocument
+            && _isPresentedToUser
+            && Opacity > 0
+            && IsVisible
+            && Browser.Visibility == Visibility.Visible
+            && _account.ConnectionState is ChatConnectionState.Ready
+                or ChatConnectionState.SignInRequired
+            && owner is { IsActive: true, WindowState: not WindowState.Minimized };
+    }
+
     private void ShowFailure(string message)
     {
+        _hasInteractiveEmbeddedDocument = false;
         _account.ConnectionState = ChatConnectionState.Failed;
         Browser.Visibility = Visibility.Hidden;
         LoadingOverlay.Visibility = Visibility.Collapsed;

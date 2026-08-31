@@ -52,7 +52,7 @@ The host never injects script, reads cookies, registers a host object, or enable
 - every `CoreWebView2Frame.NavigationStarting`, including nested frames; and
 - every document-context `WebResourceRequested` event.
 
-Static/CDN domains remain available as ordinary subresources but cannot become a trusted top-level or child document. Non-user-initiated external navigation is canceled silently. A direct user gesture may open one bounded, canonical external HTTPS URL after confirmation.
+Static/CDN domains remain available as ordinary subresources but cannot become a trusted top-level or child document. Startup and non-user-initiated external navigation are canceled silently. A direct user gesture from a visible, fully loaded allowed Steam document may open one bounded, canonical external HTTPS URL after confirmation.
 
 Permissions are deny-by-default and never saved. Notification permission is allowed only for the exact Steam origin and is handled by the native host; untrusted origins are discarded. Only a user-initiated microphone request from the exact Steam origin while the selected workspace and window are visible can reach WebView2's own prompt. Screen capture, camera, clipboard read, HTTP authentication, client certificates, downloads, custom protocols, script dialogs, context menus, autofill, password storage, developer tools, host objects, and web messaging are denied or disabled.
 

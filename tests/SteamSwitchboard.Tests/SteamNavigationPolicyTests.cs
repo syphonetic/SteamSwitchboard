@@ -63,8 +63,18 @@ public sealed class SteamNavigationPolicyTests
     {
         const string destination = "https://example.com/path";
 
-        Assert.IsTrue(SteamNavigationPolicy.ShouldPromptForExternalLink(destination, true));
-        Assert.IsFalse(SteamNavigationPolicy.ShouldPromptForExternalLink(destination, false));
+        Assert.IsTrue(SteamNavigationPolicy.ShouldPromptForExternalLink(
+            destination,
+            isUserInitiated: true,
+            hasInteractiveEmbeddedDocument: true));
+        Assert.IsFalse(SteamNavigationPolicy.ShouldPromptForExternalLink(
+            destination,
+            isUserInitiated: false,
+            hasInteractiveEmbeddedDocument: true));
+        Assert.IsFalse(SteamNavigationPolicy.ShouldPromptForExternalLink(
+            destination,
+            isUserInitiated: true,
+            hasInteractiveEmbeddedDocument: false));
     }
 
     [TestMethod]

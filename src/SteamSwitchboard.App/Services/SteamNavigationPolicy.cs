@@ -71,8 +71,11 @@ public static class SteamNavigationPolicy
 
     public static bool ShouldPromptForExternalLink(
         string? rawUri,
-        bool isUserInitiated) =>
-        isUserInitiated && GetSafeExternalUri(rawUri) is not null;
+        bool isUserInitiated,
+        bool hasInteractiveEmbeddedDocument) =>
+        hasInteractiveEmbeddedDocument
+        && isUserInitiated
+        && GetSafeExternalUri(rawUri) is not null;
 
     public static Uri? GetSafeExternalUri(string? rawUri) =>
         TryCreateSafeHttpsUri(

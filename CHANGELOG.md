@@ -17,6 +17,7 @@ First GitHub-ready source release and self-contained Windows package.
 - Added explicit profile forgetting with browser-data clearing and profile deletion.
 - Added an original SteamSwitchboard brand mark and used it consistently in the executable, title bar, dialogs, product header, and About panel, plus a high-contrast selected-profile marker, screen-reader current-page state, a responsive high-DPI keyboard-accessible WPF interface, and beginner onboarding.
 - Kept the full shell interactive while isolated chat browsers, notification support, and native launch checks start; bounded every browser startup attempt; removed a re-entrant two-way profile-selection binding; prevented hidden WebView surfaces from painting across the sidebar; and clamped the native window to the active monitor at per-monitor DPI.
+- Prevented first-run Steam login redirects from being mistaken for user-clicked external links; external-browser confirmation is now available only from a visible, fully loaded embedded Steam page.
 
 ### Security and privacy
 
