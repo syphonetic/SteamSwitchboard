@@ -23,7 +23,9 @@ A production signature can be requested only by the protected GitHub tag workflo
 4. SignPath origin verification against this repository and GitHub-hosted runners, followed by the SignPath Foundation approval required for each release.
 5. Independent reconstruction of the unsigned package on a fresh runner that has no SignPath API token or release-environment access.
 6. Proof that only bounded Authenticode metadata changed in the two permitted files, followed by Windows trust, publisher, code-signing EKU, shared-certificate, and trusted timestamp validation.
-7. GitHub provenance attestation, checksum verification, and publication as a new immutable GitHub Release. Failed or unsigned candidates are never published.
+7. GitHub provenance attestation, checksum verification, and publication as a new immutable GitHub Release. Failed candidates and unsigned production candidates are never published by this workflow.
+
+The `v1.0.0` GitHub prerelease is a separately disclosed unsigned evaluation candidate published before Foundation onboarding. Its release title, notes, asset label, and documentation identify it as unsigned; its checksum provides integrity but no publisher identity. It is not evidence of a SignPath signature or GitHub build-provenance attestation. Version `v1.0.1` and later production binaries must pass the protected signing workflow above.
 
 The SignPath API token is an approval-gated GitHub environment secret available only to the signing job. That job has read-only source and Actions access, cannot write repository contents or Releases, and transfers only a bounded signed payload to the independent validator. No certificate private key, PFX, or personal signing certificate is stored in GitHub or this repository.
 

@@ -59,6 +59,8 @@ Archive entries are sorted and use a fixed timestamp. Source file modification t
 
 The final `1.0.1` candidate reproduced byte-for-byte across two clean package builds: **572 entries**, **104,220,771 bytes**, SHA-256 **`a386c97bbd9f58860900fef1b36ce27450ced66c10ec2508d6506199dc221431`**, from source revision **`0f53d322d3c7190da8a93164964dae106c48e947`**. A real-package signing preparation then selected exactly `SteamSwitchboard.exe` and `SteamSwitchboard.dll`, retained the same archive/revision identity across all 572 sealed payload entries, and confirmed both selected files began unsigned with the expected `1.0.1.0` file version and source-bound product version.
 
+The public `v1.0.0` unsigned prerelease was rebuilt from exact annotated-tag commit **`6dc7560c89e1d14cca7f16b815bde2aedf16a026`** rather than reusing an older local ZIP whose embedded revision did not match the rewritten tag. Two clean builds in the same disposable release checkout produced the identical 572-entry, 104,216,737-byte archive with SHA-256 **`a654d76c8506238c9b5c96e4effcf2d288db3f82afd4dd1128f07655880c9c26`**; all 173 tests and package/adversarial validation passed. GitHub recorded the same asset digest, and an anonymous post-publication download plus sidecar were rehashed successfully. A diagnostic build under a different absolute checkout path changed only `SteamSwitchboard.dll`, so this evidence is intentionally described as same-path reproducibility rather than path-independent reproducibility.
+
 ## Live Windows QA
 
 Test host:

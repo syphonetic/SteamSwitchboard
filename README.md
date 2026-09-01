@@ -8,7 +8,7 @@ SteamSwitchboard is a privacy-first Windows companion for people who use several
 
 ![SteamSwitchboard account workspace](artifacts/ui-final.png)
 
-> **Release status:** version 1.0.0 remains the immutable source-only release. Version 1.0.1 adds the protected SignPath Foundation pipeline for the first public Windows binary. The pipeline is ready but remains fail-closed until the open-source signing application is approved and configured. Local packages remain unsigned development builds; only ZIPs attached by the protected GitHub release workflow are publisher-authenticated releases.
+> **Release status:** the immutable `v1.0.0` tag now has a clearly labelled **unsigned prerelease candidate** for public evaluation and SignPath Foundation eligibility review. Its SHA-256 checksum provides integrity only; Windows reports an unknown publisher. Version 1.0.1 adds the protected SignPath Foundation pipeline and is the first candidate for a publisher-authenticated production binary. That pipeline remains fail-closed until the open-source signing application is approved and configured.
 
 ## What it solves
 

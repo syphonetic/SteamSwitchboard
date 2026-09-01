@@ -22,7 +22,7 @@ The project owner must submit the application at <https://signpath.org/apply>. U
 
 1. Keep the repository public and enable multi-factor authentication on GitHub.
 2. Confirm that the MIT license, application description, download page, privacy policy, uninstall instructions, team roles, and this code-signing policy are visible.
-3. Disclose that `v1.0.0` is currently a source-only release and `v1.0.1` is the first binary candidate. Ask whether the reproducible candidate and source release satisfy the Foundation's existing-release requirement before publishing an unsigned release candidate.
+3. Disclose the clearly labelled unsigned `v1.0.0` prerelease candidate and its checksum-only trust boundary. Ask whether it satisfies the Foundation's existing-binary-release requirement; do not describe it as signed or GitHub-attested.
 4. Accept that approval is discretionary, signing displays `SignPath Foundation` rather than a personal publisher name, and every production signature requires manual approval.
 
 Do not create or publish the `v1.0.1` tag while the application is pending. Ordinary pull-request CI remains fully functional without SignPath configuration, while tag signing fails closed.
@@ -85,7 +85,7 @@ git push -u origin my-change
 
 Open a pull request, review every changed path, and wait for both required gates. Merge only after they pass.
 
-`v1.0.0` is the immutable source-only initial tag. Do not move, delete, or recreate it. Version `1.0.1` is the first signed-binary candidate. After the SignPath application is approved, all GitHub/SignPath configuration is independently checked, and the release-pipeline pull request is merged:
+`v1.0.0` is the immutable initial tag and has one explicitly unsigned prerelease package. Do not move, delete, or recreate the tag, and do not replace its assets in place. Version `1.0.1` is the first signed-binary candidate. After the SignPath application is approved, all GitHub/SignPath configuration is independently checked, and the release-pipeline pull request is merged:
 
 ```powershell
 git switch main

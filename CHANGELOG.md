@@ -17,11 +17,11 @@ First trusted Windows binary release candidate.
 ### Distribution
 
 - Added the SignPath Foundation code-signing policy, exact two-file artifact configuration, application/onboarding record, and GitHub release-environment setup instructions for maintainers.
-- Kept `v1.0.0` immutable as the source-only initial release; `v1.0.1` is the first version eligible for a signed public Windows binary after SignPath approves and activates the open-source project.
+- Kept the `v1.0.0` tag immutable and published one exact-tag Windows package as an explicitly unsigned prerelease candidate for evaluation and Foundation eligibility review; `v1.0.1` remains the first version eligible for a signed production binary after SignPath approves and activates the open-source project.
 
 ## 1.0.0 — 2026-08-31
 
-First GitHub-ready source release and self-contained Windows package.
+First GitHub-ready source release and self-contained Windows package. The exact-tag package was later attached to a GitHub prerelease with prominent unknown-publisher and checksum-only warnings while Foundation onboarding was pending.
 
 ### Product
 
