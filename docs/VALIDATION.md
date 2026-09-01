@@ -24,13 +24,16 @@ The checked-in GitHub workflow adds a mandatory Ubuntu scanner job with checksum
 
 ## Automated security analysis
 
-On 2026-08-31:
+On 2026-09-01:
 
+- `scripts/verify.ps1`: **173 tests passed**, with a zero-warning Release build;
 - `dotnet list package --vulnerable --include-transitive --format json`: **0 vulnerable package records**;
 - Semgrep community C# + security-audit configuration: **180 rules, 76 files, 0 findings**;
 - Trivy filesystem vulnerability/secret/misconfiguration scan at High/Critical: **0 vulnerabilities, 0 secrets, and no recognised configuration files**;
 - checksum-verified Gitleaks 8.30.0 scan of the complete Git history through the release commit: **0 secret findings**; and
 - Release and test NuGet lock files: **0 known vulnerabilities**, with package-source mapping, repository-signature validation, and an exact pinned Microsoft author certificate for the one legacy package that predates repository countersigning.
+
+The checked-in workflow also passed checksum-verified Actionlint 1.7.12. PowerShell Script Analyzer 1.25.0 reported no warning/error findings after excluding its documented style-only rules (`WriteHost`, singular-noun naming, and `ShouldProcess` suggestions); those style observations are not security findings.
 
 The baseline all-rules .NET analyzer pass also informed hardening. Its non-security maintainability diagnostics are not conflated with vulnerability findings; the normal build is zero-warning and security-category diagnostics fail the build.
 
@@ -53,6 +56,8 @@ Every mutated fixture keeps the canonical checksum filename and recomputes its d
 Signing-staging fixtures additionally prove rejection of a changed non-signable file, an added file, an altered prepared binary, an unsigned final binary, source-revision substitution, and a traversal path inserted into the signing manifest. Bounded SignPath-response fixtures require exactly two root binaries, reject added files and non-signature PE mutation, preserve every non-signable payload file, and require one expected code-signing publisher. A disposable real self-signed Authenticode fixture proves normalized PE content remains stable when a certificate table is appended and changes when a non-signature byte is mutated. The protected workflow recreates this trusted baseline by rebuilding the source tag twice on a fresh runner that has no `release` environment or SignPath API token. Real signed finalization also requires both first-party hashes to change within a bounded Authenticode growth allowance, exact pre-sign PE content, valid Windows trust, a trusted timestamp, code-signing/timestamp EKUs, the exact `SignPath Foundation` publisher, and one shared signer certificate.
 
 Archive entries are sorted and use a fixed timestamp. Source file modification times therefore do not affect the ZIP. Packaging requires a clean worktree, records the complete source revision in both first-party binaries, and rejects a source/worktree change before replacing release output. Public reproducibility still depends on using the same pinned SDK/runtime inputs and source snapshot.
+
+The final `1.0.1` candidate reproduced byte-for-byte across two clean package builds: **572 entries**, **104,220,771 bytes**, SHA-256 **`a386c97bbd9f58860900fef1b36ce27450ced66c10ec2508d6506199dc221431`**, from source revision **`0f53d322d3c7190da8a93164964dae106c48e947`**. A real-package signing preparation then selected exactly `SteamSwitchboard.exe` and `SteamSwitchboard.dll`, retained the same archive/revision identity across all 572 sealed payload entries, and confirmed both selected files began unsigned with the expected `1.0.1.0` file version and source-bound product version.
 
 ## Live Windows QA
 
