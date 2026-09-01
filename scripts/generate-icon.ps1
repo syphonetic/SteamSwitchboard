@@ -15,9 +15,9 @@ Add-Type -AssemblyName PresentationCore, WindowsBase
 
 $resolvedOutput = [System.IO.Path]::GetFullPath($OutputPath)
 $expectedRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$relativeOutput = Get-ContainedRelativePath `
+Get-ContainedRelativePath `
     -RootPath $expectedRoot `
-    -CandidatePath $resolvedOutput
+    -CandidatePath $resolvedOutput | Out-Null
 $isIcon = [System.IO.Path]::GetExtension($resolvedOutput).Equals(
     '.ico',
     [System.StringComparison]::OrdinalIgnoreCase)

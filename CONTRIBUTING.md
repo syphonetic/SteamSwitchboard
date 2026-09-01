@@ -5,7 +5,7 @@ Thanks for helping improve SteamSwitchboard. Keep changes focused, privacy-prese
 ## Before opening a pull request
 
 1. Use Windows and the .NET 9.0.317 SDK.
-2. Read `SECURITY.md`, `docs/ARCHITECTURE.md`, and `docs/PRIVACY.md` before changing authentication, browser, filesystem, launch, or packaging behavior.
+2. Read `SECURITY.md`, `CODE_SIGNING_POLICY.md`, `docs/ARCHITECTURE.md`, and `docs/PRIVACY.md` before changing authentication, browser, filesystem, launch, packaging, or release behavior.
 3. Add regression tests for behavior changes and security fixes.
 4. Run:
 
@@ -23,5 +23,6 @@ Thanks for helping improve SteamSwitchboard. Keep changes focused, privacy-prese
 - Do not add password/cookie capture, authentication export/import, Steam injection, anti-cheat or licensing bypasses, or silent external navigation.
 - Preserve fail-closed launch verification and durable profile cleanup.
 - Keep the normal Release build warning-free.
+- Treat `.github/workflows`, `.signpath`, packaging scripts, and signing validators as one release trust boundary; changes require explicit maintainer review.
 
 Report suspected vulnerabilities through the private process described in `SECURITY.md`, not a public issue.

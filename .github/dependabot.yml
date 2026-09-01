@@ -1,0 +1,40 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - security
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:30'
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    labels:
+      - dependencies
+      - security
+    groups:
+      microsoft-runtime:
+        patterns:
+          - Microsoft.WindowsAppSDK.*
+          - Microsoft.Web.WebView2
+      test-tooling:
+        patterns:
+          - Microsoft.NET.Test.Sdk
+          - MSTest.*

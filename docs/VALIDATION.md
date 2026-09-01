@@ -20,17 +20,20 @@ The Release suite contains **173 passing tests** covering:
 
 The ordinary gate runs a disposable empty-cache signer-policy restore followed by normal signed-source/locked NuGet restore, formatting verification, deterministic Release compilation, warnings-as-errors, .NET security diagnostics as errors, and all tests.
 
-The checked-in GitHub workflow adds a mandatory Ubuntu scanner job with checksum-pinned Gitleaks and pinned Semgrep and Trivy versions. The Windows build/test/package job declares that scanner job as a prerequisite and must reproduce the package hash across two builds. The current read-only workflow has no binary-upload step, so an unsigned tag build cannot silently become a release asset.
+The checked-in GitHub workflow adds a mandatory Ubuntu scanner job with checksum-pinned Gitleaks and pinned Semgrep and Trivy versions. The Windows build/test/package job declares that scanner job as a prerequisite and must reproduce the package hash across two builds. Protected version tags add an approval-gated SignPath Foundation job with read-only source/Actions access, GitHub-hosted origin verification, a fresh no-signing-token validation/attestation job, and a separate publication job; no unsigned or signer-substituted candidate can cross the signing manifest, normalized PE content, Authenticode, timestamp, checksum, or GitHub provenance gates.
 
 ## Automated security analysis
 
-On 2026-08-31:
+On 2026-09-01:
 
+- `scripts/verify.ps1`: **173 tests passed**, with a zero-warning Release build;
 - `dotnet list package --vulnerable --include-transitive --format json`: **0 vulnerable package records**;
 - Semgrep community C# + security-audit configuration: **180 rules, 76 files, 0 findings**;
 - Trivy filesystem vulnerability/secret/misconfiguration scan at High/Critical: **0 vulnerabilities, 0 secrets, and no recognised configuration files**;
 - checksum-verified Gitleaks 8.30.0 scan of the complete Git history through the release commit: **0 secret findings**; and
 - Release and test NuGet lock files: **0 known vulnerabilities**, with package-source mapping, repository-signature validation, and an exact pinned Microsoft author certificate for the one legacy package that predates repository countersigning.
+
+The checked-in workflow also passed checksum-verified Actionlint 1.7.12. PowerShell Script Analyzer 1.25.0 reported no warning/error findings after excluding its documented style-only rules (`WriteHost`, singular-noun naming, and `ShouldProcess` suggestions); those style observations are not security findings.
 
 The baseline all-rules .NET analyzer pass also informed hardening. Its non-security maintainability diagnostics are not conflated with vulnerability findings; the normal build is zero-warning and security-category diagnostics fail the build.
 
@@ -50,7 +53,13 @@ The packaging pipeline then mutates disposable archive copies and proves rejecti
 
 Every mutated fixture keeps the canonical checksum filename and recomputes its digest, then must fail with the scenario-specific rejection reason. This prevents an unrelated early checksum-name failure from masquerading as coverage of the malicious payload.
 
+Signing-staging fixtures additionally prove rejection of a changed non-signable file, an added file, an altered prepared binary, an unsigned final binary, source-revision substitution, and a traversal path inserted into the signing manifest. Bounded SignPath-response fixtures require exactly two root binaries, reject added files and non-signature PE mutation, preserve every non-signable payload file, and require one expected code-signing publisher. A disposable real self-signed Authenticode fixture proves normalized PE content remains stable when a certificate table is appended and changes when a non-signature byte is mutated. The protected workflow recreates this trusted baseline by rebuilding the source tag twice on a fresh runner that has no `release` environment or SignPath API token. Real signed finalization also requires both first-party hashes to change within a bounded Authenticode growth allowance, exact pre-sign PE content, valid Windows trust, a trusted timestamp, code-signing/timestamp EKUs, the exact `SignPath Foundation` publisher, and one shared signer certificate.
+
 Archive entries are sorted and use a fixed timestamp. Source file modification times therefore do not affect the ZIP. Packaging requires a clean worktree, records the complete source revision in both first-party binaries, and rejects a source/worktree change before replacing release output. Public reproducibility still depends on using the same pinned SDK/runtime inputs and source snapshot.
+
+The final `1.0.1` candidate reproduced byte-for-byte across two clean package builds: **572 entries**, **104,220,771 bytes**, SHA-256 **`a386c97bbd9f58860900fef1b36ce27450ced66c10ec2508d6506199dc221431`**, from source revision **`0f53d322d3c7190da8a93164964dae106c48e947`**. A real-package signing preparation then selected exactly `SteamSwitchboard.exe` and `SteamSwitchboard.dll`, retained the same archive/revision identity across all 572 sealed payload entries, and confirmed both selected files began unsigned with the expected `1.0.1.0` file version and source-bound product version.
+
+The public `v1.0.0` unsigned prerelease was rebuilt from exact annotated-tag commit **`6dc7560c89e1d14cca7f16b815bde2aedf16a026`** rather than reusing an older local ZIP whose embedded revision did not match the rewritten tag. Two clean builds in the same disposable release checkout produced the identical 572-entry, 104,216,737-byte archive with SHA-256 **`a654d76c8506238c9b5c96e4effcf2d288db3f82afd4dd1128f07655880c9c26`**; all 173 tests and package/adversarial validation passed. GitHub recorded the same asset digest, and an anonymous post-publication download plus sidecar were rehashed successfully. A diagnostic build under a different absolute checkout path changed only `SteamSwitchboard.dll`, so this evidence is intentionally described as same-path reproducibility rather than path-independent reproducibility.
 
 ## Live Windows QA
 
@@ -67,7 +76,7 @@ Observed during this pass:
 - The normal-privilege app started without clipping at 144-DPI, exposed the expected title and associated generated icon, detected 58 local Steam library entries, and settled into the beginner first-run state.
 - The repeatable `scripts/test-ui-regression.ps1` harness created two disposable profiles, forced the selected profile's first browser initialization to time out, activated the visible Reconnect action, and proved a fresh session recovered. It also proved the shell enabled and accepted Chats/Settings navigation within one second, exposed the current page and dynamic unread account/alert labels to UI Automation, rendered a three-DIP accent selection marker, preserved selected-before-background browser startup ordering, rejected hidden/minimised or physically undersized native windows by cross-checking HWND pixels against WPF's rendered size, kept the full physical window wholly inside its 3840×2088 work area, moved both profiles out of the bounded starting state, decoded the exact 512×512 generated logo, applied generated bitmap branding to the native window and compatibility notification icon, exercised numbered taskbar-overlay appearance/read-state clearing without conflating cleared alert history, mathematically centred the nickname/card without Edit overlap, and measured a **0.11%** near-white pixel ratio in the real composed account sidebar. That HWND-level pixel assertion detects the reported white WebView overpaint; all disposable browser data and processes were removed afterwards. The harness project is compiled by the normal/CI solution gate, while its composed-screen run is intentionally a documented interactive-Windows check rather than a headless CI step.
 - The opt-in `--notification-smoke` variant kept input responsive while notification support loaded on a worker, recovered cleanly from this host's missing modern App SDK Singleton broker, submitted the compatibility Windows test alert through the real Settings button, verified the user-facing delivery status, and cleared only the dedicated test-alert state before exit. The same harness accepts and removes only its isolated test group on hosts where `AppNotificationManager.IsSupported()` succeeds, without deleting genuine SteamSwitchboard chat alerts.
-- The self-contained 1.0.0 ZIP passed checksum, pre-extraction path validation, version/icon/no-PDB/no-session-data assertions, and adversarial validator tests.
+- The self-contained 1.0.0 ZIP passed checksum, pre-extraction path validation, version/icon/no-PDB/no-session-data assertions, and adversarial validator tests. Version 1.0.1 adds the signing-staging and protected-publication gates; the first real Foundation-signed artifact remains an owner acceptance item until SignPath approves and activates the open-source project.
 - A baseline packaged process remained healthy through startup, then closed normally. Its disposable extraction and test-data directories were removed, with zero processes remaining. The final feature package was not process-smoked on this host because an older user-owned SteamSwitchboard instance and its real `%LOCALAPPDATA%` state were deliberately left untouched; the exact final ZIP instead receives deterministic WPF rendering plus static and adversarial package validation.
 - A final screenshot was captured from a disposable synthetic-profile render with startup discovery disabled; its `Legend` and `Phonetic Accounts` entries are test fixtures and it contains no personal account, library, QR, conversation, or credential data.
 - Earlier functional QA established distinct generated WebView2 profile directories, account switching between live controls, Steam sign-in rendering, wrong-native-account launch blocking, and profile deletion. The 1.0.0 hardening pass adds durable cleanup retry and stricter browser policy around that verified foundation.
@@ -109,7 +118,7 @@ Reviewed all filesystem probes before use, Steam signer/process-ID/start-time/St
 
 ### Pass 3 — release, usability, and residual-risk honesty
 
-Reviewed beginner flow, responsive browser startup, real composed HWND layering, constrained/high-DPI layout and monitor clamping, settings restoration, disambiguated accessibility labels, unsigned-build messaging, exact version propagation, clean-cache dependency trust, scanner results, ZIP construction, pre-extraction validation, adversarial fixtures, smoke-test boundary, cleanup, and documentation. The unsigned-development, 16-live-session, native-Steam, and web-identity limitations are prominent rather than hidden.
+Reviewed beginner flow, responsive browser startup, real composed HWND layering, constrained/high-DPI layout and monitor clamping, settings restoration, disambiguated accessibility labels, unsigned-development messaging, exact version propagation, clean-cache dependency trust, scanner results, reproducible ZIP construction, integrity-locked signing, least-privilege SignPath submission, origin verification, provenance handoff, pre-extraction validation, adversarial fixtures, smoke-test boundary, cleanup, and documentation. The local-unsigned, 16-live-session, native-Steam, and web-identity limitations are prominent rather than hidden.
 
 **Assessment:** happy with the release and user-trust boundary as a world-class development product.
 
@@ -117,10 +126,11 @@ Reviewed beginner flow, responsive browser startup, real composed HWND layering,
 
 Before public production distribution:
 
-1. Authenticode-sign and timestamp `SteamSwitchboard.exe` and `SteamSwitchboard.dll` with the publisher certificate; run packaging with `-RequireSignature -ExpectedPublisher '<publisher>'`.
-2. Wrap the complete payload in an authenticated installer/package (for example a signed MSIX), publish through a trusted HTTPS release channel, and verify immutable release metadata independently of the adjacent checksum.
-3. Rebuild on the current supported .NET runtime/WebView2 patch and run `security-audit.ps1 -RequireExternalScanners`.
-4. Add two disposable real accounts, confirm the host banner/login label against Steam's page, and send/receive one harmless message per account.
-5. Start a free/test game with a matching native account, then repeat from a mismatch and confirm launch occurs only after Steam's active account changes.
-6. Forget a disposable profile, restart, and confirm it requires fresh Steam authentication; repeat once with an intentionally interrupted cleanup to confirm retry.
-7. Repeat smoke checks on the oldest supported Windows 10 build and a standard non-administrator Windows account.
+1. Obtain SignPath Foundation open-source approval, install its GitHub App only for this repository, link the predefined GitHub trusted build system, and confirm the `SignPath Foundation` certificate and required manual approval.
+2. Activate the `release` GitHub environment with one least-privilege SignPath CI submitter secret and four assigned environment variables documented in `GITHUB_RELEASE.md`; keep the protected tag ruleset and immutable Releases enabled.
+3. Upload the checked-in two-file artifact configuration, require origin verification for protected release refs, rebuild on the current supported .NET runtime/WebView2 patch, run `security-audit.ps1 -RequireExternalScanners`, and approve one protected prerelease tag to exercise signing without replacing an existing tag.
+4. Download the resulting assets, verify the SHA-256 sidecar, `gh attestation verify`, both Authenticode signatures/timestamps, and Windows' displayed publisher on a clean standard-user VM.
+5. Add two disposable real accounts, confirm the host banner/login label against Steam's page, and send/receive one harmless message per account.
+6. Start a free/test game with a matching native account, then repeat from a mismatch and confirm launch occurs only after Steam's active account changes.
+7. Forget a disposable profile, restart, and confirm it requires fresh Steam authentication; repeat once with an intentionally interrupted cleanup to confirm retry.
+8. Repeat smoke checks on the oldest supported Windows 10 build and a standard non-administrator Windows account.
