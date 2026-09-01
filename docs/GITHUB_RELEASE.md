@@ -1,136 +1,76 @@
 # GitHub CI and signed release guide
 
-SteamSwitchboard uses one `Verify` workflow for pull requests, pushes, and protected version tags. Ordinary runs have read-only repository access. A version tag can publish a Windows binary only after all source/dependency scanners and the reproducible Windows package gate pass.
+SteamSwitchboard uses one `Verify` workflow for pull requests, pushes, and protected version tags. Ordinary runs have read-only repository access. A version tag can publish a Windows binary only after all source/dependency scanners, tests, and reproducible-package gates pass.
 
-The release path is deliberately split:
+Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). See the repository's [code signing policy](../CODE_SIGNING_POLICY.md).
+
+## Protected release design
 
 1. The approval-gated `sign-release` job rebuilds the unsigned ZIP twice and requires identical SHA-256 hashes.
-2. It validates/extracts that exact candidate and records every payload path, length, and hash.
-3. GitHub OIDC signs in to Azure without a client secret. Microsoft Artifact Signing receives only the absolute paths to `SteamSwitchboard.exe` and `SteamSwitchboard.dll`, then the job exports only the signed payload.
-4. A fresh `validate-release` runner has no Azure environment/identity. It independently rebuilds the protected source tag twice, regenerates the trusted manifest from its own reproducible archive, treats the signed payload as untrusted, and permits only Authenticode metadata to differ in the two first-party files.
-5. Finalization requires valid same-certificate Authenticode signatures, the configured publisher, code-signing EKU, trusted RFC 3161 timestamps, and unchanged executable code/resources; GitHub then signs build-provenance attestations.
-6. A separate `publish-release` job has GitHub release-write permission but no Azure identity. It verifies the handoff checksum and exact workflow/source provenance before creating the GitHub Release.
+2. It validates/extracts that exact candidate and records every payload path, length, and hash. Only `SteamSwitchboard.exe` and `SteamSwitchboard.dll` are uploaded as a one-day GitHub artifact.
+3. SignPath's official immutable-pinned GitHub action submits that exact artifact. The SignPath connector verifies that it came from this repository and GitHub-hosted workflow, applies the checked-in metadata restrictions, and waits for the Foundation-required manual release approval.
+4. The signer job accepts exactly two returned root files, requires intact Authenticode metadata from `SignPath Foundation`, proves their normalized PE contents still match the unsigned manifest, and merges them into the locked payload. It cannot write repository contents or Releases.
+5. A fresh `validate-release` runner has no `release` environment or SignPath token. It independently rebuilds the source tag twice, regenerates its trusted manifest, treats the returned payload as untrusted, and permits only bounded Authenticode metadata to differ in the two first-party files.
+6. Finalization requires valid same-certificate Authenticode signatures, the exact Foundation publisher, code-signing EKU, trusted RFC 3161 timestamps, and unchanged executable code/resources. GitHub then signs provenance attestations.
+7. A separate `publish-release` job has release-write permission but no signing credential. It verifies exact filenames, checksum, workflow/source provenance, and hosted-runner policy before creating an immutable GitHub Release whose page links this policy.
 
-Every referenced GitHub/Azure action is pinned to an immutable commit. No PFX, certificate private key, Azure client secret, or long-lived GitHub token belongs in this repository.
+Every referenced GitHub/SignPath action is pinned to an immutable commit. The certificate private key remains in SignPath's HSM. No PFX, personal signing certificate, or release-capable long-lived GitHub token belongs in this repository.
 
-## One-time Microsoft Artifact Signing setup
+## Apply for free open-source signing
 
-Microsoft Public Trust identity validation is an external prerequisite. Microsoft currently limits organization and individual eligibility by region, and public validation can take 1–20 business days or longer. Check the current [Artifact Signing quickstart and eligibility](https://learn.microsoft.com/azure/artifact-signing/quickstart) before paying for or creating resources.
+The project owner must submit the application at <https://signpath.org/apply>. Use the exact public details and project description in [SIGNPATH_ONBOARDING.md](SIGNPATH_ONBOARDING.md). Before submission:
 
-1. In Azure, select the intended subscription and register `Microsoft.CodeSigning`.
+1. Keep the repository public and enable multi-factor authentication on GitHub.
+2. Confirm that the MIT license, application description, download page, privacy policy, uninstall instructions, team roles, and this code-signing policy are visible.
+3. Disclose that `v1.0.0` is currently a source-only release and `v1.0.1` is the first binary candidate. Ask whether the reproducible candidate and source release satisfy the Foundation's existing-release requirement before publishing an unsigned release candidate.
+4. Accept that approval is discretionary, signing displays `SignPath Foundation` rather than a personal publisher name, and every production signature requires manual approval.
 
-   ```powershell
-   az login
-   az account set --subscription '<subscription-id>'
-   az provider register --namespace Microsoft.CodeSigning
-   az extension add --name artifact-signing
-   ```
+Do not create or publish the `v1.0.1` tag while the application is pending. Ordinary pull-request CI remains fully functional without SignPath configuration, while tag signing fails closed.
 
-2. Create an Artifact Signing account in a supported region. Basic is sufficient unless the project's signing volume requires another tier.
+## Configure SignPath after approval
 
-   ```powershell
-   az group create --name '<resource-group>' --location '<azure-region>'
-   az artifact-signing create `
-     --name '<globally-unique-account>' `
-     --location '<azure-region>' `
-     --resource-group '<resource-group>' `
-     --sku Basic
-   ```
+Use the exact organization and slugs assigned in the SignPath dashboard:
 
-3. In the Azure portal, assign your human account the required identity-verifier access, create a **Public** identity validation, and complete every email/document/identity step. Identity validation cannot be completed through the CLI. Wait until its state is **Completed**.
+1. Install the SignPath GitHub App with access only to `syphonetic/SteamSwitchboard`.
+2. Add the predefined `GitHub.com` trusted build system to the SignPath organization and link it to the SteamSwitchboard project.
+3. Set the project repository URL to `https://github.com/syphonetic/SteamSwitchboard`.
+4. Create or confirm a release signing policy that uses the Foundation certificate, requires origin verification, accepts only protected release refs from this repository, and requires one manual approval by `syphonetic`.
+5. Create an artifact configuration from [.signpath/artifact-configuration.xml](../.signpath/artifact-configuration.xml). It signs exactly the two first-party PE files and enforces their product and file versions.
+6. Create a dedicated CI user/API token with submitter permission only for this project and release policy. It must have no approver, configurator, certificate, organization-administrator, or GitHub release authority.
 
-4. Create a **PublicTrust** certificate profile from the completed identity. Record its account name, profile name, regional endpoint, and exact certificate common name shown by the subject preview.
+The official SignPath documentation describes the [GitHub trusted-build connector](https://docs.signpath.io/trusted-build-systems/github), [origin verification](https://docs.signpath.io/origin-verification/), and [artifact configuration](https://docs.signpath.io/artifact-configuration/).
 
-   ```powershell
-   az artifact-signing certificate-profile create `
-     --resource-group '<resource-group>' `
-     --account-name '<artifact-signing-account>' `
-     --name '<certificate-profile>' `
-     --profile-type PublicTrust `
-     --identity-validation-id '<completed-identity-validation-id>'
-   ```
+## Configure the protected GitHub environment
 
-   Do not use `PrivateTrust` for a public download: other users' Windows installations will not trust it by default.
+The repository uses a GitHub environment named exactly `release`:
 
-5. Create one dedicated Microsoft Entra application/service principal for this workflow. It receives no password or certificate credential.
+1. Keep at least one required reviewer. For a one-maintainer repository, keep “prevent self-review” off; turn it on after a second trusted maintainer is available.
+2. Keep deployment branches/tags limited to selected tags matching `v*`.
+3. Keep the active tag ruleset matching `refs/tags/v*` that blocks deletion and non-fast-forward updates. The workflow refuses an unprotected tag.
+4. Keep `main` protected with `Source and dependency security gate` and `Windows Release gate` required before merging.
+5. Keep release immutability enabled under **Settings → General → Releases**.
 
-   ```powershell
-   $ApplicationId = az ad app create `
-     --display-name 'SteamSwitchboard GitHub Artifact Signing' `
-     --query appId `
-     --output tsv
-   $ServicePrincipalObjectId = az ad sp create `
-     --id $ApplicationId `
-     --query id `
-     --output tsv
-   $TenantId = az account show --query tenantId --output tsv
-   $SubscriptionId = az account show --query id --output tsv
-   ```
+After SignPath approval, add these values to the `release` environment—not repository-wide configuration:
 
-6. Federate that application to exactly the GitHub `release` environment. The subject is case-sensitive and must remain exactly as shown.
+| Kind | Name | Value |
+|---|---|---|
+| Secret | `SIGNPATH_API_TOKEN` | Dedicated least-privilege CI submitter token |
+| Variable | `SIGNPATH_ORGANIZATION_ID` | Assigned organization UUID |
+| Variable | `SIGNPATH_PROJECT_SLUG` | Assigned project slug |
+| Variable | `SIGNPATH_SIGNING_POLICY_SLUG` | Assigned release policy slug |
+| Variable | `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` | Assigned artifact-configuration slug |
 
-   ```powershell
-   $FederatedCredential = @{
-     name = 'SteamSwitchboard-GitHub-release'
-     issuer = 'https://token.actions.githubusercontent.com'
-     subject = 'repo:syphonetic/SteamSwitchboard:environment:release'
-     description = 'Secretless signing from the protected SteamSwitchboard release environment'
-     audiences = @('api://AzureADTokenExchange')
-   } | ConvertTo-Json -Compress
-
-   az ad app federated-credential create `
-     --id $ApplicationId `
-     --parameters $FederatedCredential
-   ```
-
-7. Give only that service principal the `Artifact Signing Certificate Profile Signer` role, scoped to one profile—not the subscription, resource group, or whole signing account.
-
-   ```powershell
-   $ProfileScope = "/subscriptions/$SubscriptionId/resourceGroups/<resource-group>/providers/Microsoft.CodeSigning/codeSigningAccounts/<artifact-signing-account>/certificateProfiles/<certificate-profile>"
-   az role assignment create `
-     --assignee-object-id $ServicePrincipalObjectId `
-     --assignee-principal-type ServicePrincipal `
-     --role 'Artifact Signing Certificate Profile Signer' `
-     --scope $ProfileScope
-   ```
-
-Microsoft documents this least-privilege scope in its [Artifact Signing RBAC guide](https://learn.microsoft.com/azure/artifact-signing/tutorial-assign-roles).
-
-## One-time GitHub protection setup
-
-1. In **Settings → Environments**, create an environment named exactly `release`.
-2. Add at least one required reviewer. Keep “prevent self-review” off if this is currently a one-maintainer repository; turn it on after a second trusted maintainer is available.
-3. Limit deployment branches/tags to selected tags matching `v*`.
-4. Create an active tag ruleset matching `refs/tags/v*` that blocks tag deletion and non-fast-forward updates. The workflow checks `github.ref_protected` and refuses an unprotected tag.
-5. Protect `main` and require both `Source and dependency security gate` and `Windows Release gate` before merging. Do not permit pull requests to bypass those checks.
-6. In **Settings → General → Releases**, enable **release immutability**. GitHub then locks a published release's tag and assets and generates a release attestation. This applies only to releases published after the setting is enabled.
-
-Store these six non-secret Azure identifiers as **environment variables** on `release` (not repository-wide values):
-
-| Variable | Value |
-|---|---|
-| `AZURE_CLIENT_ID` | Dedicated Entra application's client ID |
-| `AZURE_TENANT_ID` | Azure directory/tenant ID |
-| `AZURE_SUBSCRIPTION_ID` | Subscription containing Artifact Signing |
-| `ARTIFACT_SIGNING_ENDPOINT` | Exact regional HTTPS endpoint, such as `https://eus.codesigning.azure.net` |
-| `ARTIFACT_SIGNING_ACCOUNT` | Artifact Signing account name |
-| `ARTIFACT_SIGNING_PROFILE` | PublicTrust certificate profile name |
-
-Store `ARTIFACT_SIGNING_PUBLISHER` as a **repository variable** containing the exact certificate common name shown in the subject preview. The clean validation job intentionally does not reference the Azure-enabled `release` environment, so its OIDC token cannot match the signing federation; the non-secret publisher name is the only shared repository-level value.
-
-With GitHub CLI authenticated to `syphonetic`, the variables can be added without exposing any secret:
+With GitHub CLI authenticated to `syphonetic`, set the secret interactively so it never appears in shell history:
 
 ```powershell
-gh variable set AZURE_CLIENT_ID --env release --body $ApplicationId
-gh variable set AZURE_TENANT_ID --env release --body $TenantId
-gh variable set AZURE_SUBSCRIPTION_ID --env release --body $SubscriptionId
-gh variable set ARTIFACT_SIGNING_ENDPOINT --env release --body 'https://<region-code>.codesigning.azure.net'
-gh variable set ARTIFACT_SIGNING_ACCOUNT --env release --body '<artifact-signing-account>'
-gh variable set ARTIFACT_SIGNING_PROFILE --env release --body '<certificate-profile>'
-gh variable set ARTIFACT_SIGNING_PUBLISHER --body '<exact-certificate-common-name>'
+gh secret set SIGNPATH_API_TOKEN --env release
+gh variable set SIGNPATH_ORGANIZATION_ID --env release --body '<assigned-organization-uuid>'
+gh variable set SIGNPATH_PROJECT_SLUG --env release --body '<assigned-project-slug>'
+gh variable set SIGNPATH_SIGNING_POLICY_SLUG --env release --body '<assigned-release-policy-slug>'
+gh variable set SIGNPATH_ARTIFACT_CONFIGURATION_SLUG --env release --body '<assigned-artifact-configuration-slug>'
 ```
 
-Never add `AZURE_CLIENT_SECRET`; the workflow is intentionally designed to reject the need for one.
+Never paste the API token into a command argument, variable, source file, issue, pull request, workflow log, or release asset.
 
 ## Pull-request and release flow
 
@@ -145,7 +85,7 @@ git push -u origin my-change
 
 Open a pull request, review every changed path, and wait for both required gates. Merge only after they pass.
 
-`v1.0.0` is already published as the immutable source-only initial tag. Do not move, delete, or recreate it. Version `1.0.1` is the first signed-binary candidate. After this release-pipeline change is merged and the Azure/GitHub setup above is complete:
+`v1.0.0` is the immutable source-only initial tag. Do not move, delete, or recreate it. Version `1.0.1` is the first signed-binary candidate. After the SignPath application is approved, all GitHub/SignPath configuration is independently checked, and the release-pipeline pull request is merged:
 
 ```powershell
 git switch main
@@ -158,11 +98,13 @@ git tag -a "v$Version" -m "SteamSwitchboard $Version"
 git push origin "v$Version"
 ```
 
-Open **Actions → Verify**, select the tag run, and approve the `release` environment after confirming the commit/tag/version. The workflow then publishes the GitHub Release automatically. A failed run never uploads an unsigned binary as a release asset. Fix the cause and rerun the same workflow; never move a public version tag to different source.
+Open **Actions → Verify**, select the tag run, and approve the GitHub `release` environment after confirming the commit, tag, and version. Then approve the matching request in SignPath after confirming the repository, commit, workflow, artifact configuration, and two filenames. The workflow publishes automatically only after independent validation succeeds.
+
+A failed run never publishes an unsigned binary. Diagnose and rerun the same workflow when safe; never move a public version tag to different source. If SignPath's source/build policy forbids reruns, create a new version after fixing the cause.
 
 ## Independent release verification
 
-Download the two assets from the Release page into an empty directory, then verify all three trust signals:
+Download the two assets from the Release page into an empty directory and verify checksum and GitHub provenance:
 
 ```powershell
 $Version = '1.0.1'
@@ -188,20 +130,30 @@ gh attestation verify "$Archive.sha256" `
 After extraction, inspect both first-party files:
 
 ```powershell
-Get-AuthenticodeSignature ".\SteamSwitchboard-$Version-win-x64\SteamSwitchboard.exe" |
-  Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
-Get-AuthenticodeSignature ".\SteamSwitchboard-$Version-win-x64\SteamSwitchboard.dll" |
-  Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+$Root = ".\SteamSwitchboard-$Version-win-x64"
+$Signatures = @(
+  Get-AuthenticodeSignature "$Root\SteamSwitchboard.exe"
+  Get-AuthenticodeSignature "$Root\SteamSwitchboard.dll"
+)
+foreach ($Signature in $Signatures) {
+  if ($Signature.Status -ne 'Valid' `
+      -or $null -eq $Signature.TimeStamperCertificate `
+      -or $Signature.SignerCertificate.GetNameInfo('SimpleName', $false) -cne 'SignPath Foundation') {
+    throw 'Release signature validation failed.'
+  }
+}
+$Signatures | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
 ```
 
-Both statuses must be `Valid`, both files must show the expected publisher, and both must have timestamp certificates. Windows' Properties dialog should show the same Digital Signatures identity.
+Windows' Properties dialog must show the same Digital Signatures identity. A new validly signed application may still receive a SmartScreen reputation prompt initially; code signing establishes publisher identity and integrity but does not guarantee immediate reputation.
 
 ## Troubleshooting
 
-- **Release job says the tag is unprotected:** activate the `v*` tag ruleset; do not remove the check from the workflow.
-- **Azure login has no matching federated identity:** verify the exact subject `repo:syphonetic/SteamSwitchboard:environment:release`, issuer, audience, client ID, and tenant ID.
-- **Artifact Signing returns authorization denied:** assign the signer role to the service principal object ID at the exact certificate-profile scope and allow Azure RBAC propagation time.
-- **Publisher mismatch:** use the certificate profile's exact common name, including punctuation and case, for `ARTIFACT_SIGNING_PUBLISHER`.
-- **Signature has no timestamp:** do not publish. The workflow requires Microsoft's RFC 3161 timestamp and fails closed.
-- **A release already exists for the tag:** inspect it rather than using overwrite/clobber. Publish a new version for changed bytes.
+- **Tag is unprotected:** restore the active `v*` tag ruleset; do not remove the workflow check.
+- **SignPath configuration is missing:** wait for Foundation approval, then set the one secret and four environment variables exactly as assigned.
+- **Origin verification fails:** confirm the SignPath GitHub App repository scope, predefined GitHub trusted-build link, exact repository URL, protected ref policy, and GitHub-hosted runners.
+- **Signing request is awaiting approval:** inspect the source commit, workflow, artifact configuration, product/file-version parameters, and exact two-file artifact before approving it in SignPath.
+- **Response shape or publisher fails:** do not loosen the importer. Confirm the artifact configuration signs exactly the two root files with the Foundation certificate.
+- **Signature has no trusted timestamp or Windows trust fails:** do not publish; ask SignPath support to inspect the signing policy/certificate.
+- **A release already exists for the tag:** inspect it instead of overwriting. Publish a new version for changed bytes.
 - **No release appears after normal branch CI:** intentional. Only an annotated, protected `vMAJOR.MINOR.PATCH` tag can enter the signing environment.

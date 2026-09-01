@@ -19,6 +19,7 @@ Add-Type `
     -Language CSharp `
     -OutputAssembly $unsignedPeTemplate
 $testCertificate = $null
+$responseCertificate = $null
 
 function New-SigningFixture {
     param([Parameter(Mandatory)][string]$Scenario)
@@ -113,6 +114,32 @@ function New-DownloadedSignedPayloadFixture {
     return $root
 }
 
+function New-SignPathResponseFixture {
+    param(
+        [Parameter(Mandatory)][string]$Scenario,
+        [Parameter(Mandatory)][string]$SourcePayload,
+        [Parameter(Mandatory)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate
+    )
+
+    $root = Join-Path $temporaryBase (
+        "SteamSwitchboard-signpath-response-$Scenario-$([Guid]::NewGuid().ToString('N'))")
+    [System.IO.Directory]::CreateDirectory($root) | Out-Null
+    $signedPayloadRoots.Add($root)
+    foreach ($relativePath in @('SteamSwitchboard.dll', 'SteamSwitchboard.exe')) {
+        $destination = Join-Path $root $relativePath
+        Copy-Item -LiteralPath (Join-Path $SourcePayload $relativePath) -Destination $destination
+        $signature = Set-AuthenticodeSignature `
+            -LiteralPath $destination `
+            -Certificate $Certificate `
+            -HashAlgorithm SHA256
+        if ($signature.Status -eq [System.Management.Automation.SignatureStatus]::NotSigned) {
+            throw "The SignPath-response fixture was not signed: $relativePath"
+        }
+    }
+    return $root
+}
+
 function Assert-FixtureRejected {
     param(
         [Parameter(Mandatory)][scriptblock]$Action,
@@ -138,6 +165,80 @@ function Assert-FixtureRejected {
 try {
     $baseline = New-SigningFixture -Scenario 'baseline'
     Invoke-FixtureValidation -Root $baseline
+
+    $responseCertificate = New-SelfSignedCertificate `
+        -Type CodeSigningCert `
+        -Subject 'CN=Fixture Publisher' `
+        -CertStoreLocation 'Cert:\CurrentUser\My' `
+        -NotAfter ([DateTime]::UtcNow.AddDays(1))
+    $responseTarget = New-SigningFixture -Scenario 'signpath-response-target'
+    $signPathResponse = New-SignPathResponseFixture `
+        -Scenario 'baseline' `
+        -SourcePayload (Join-Path $responseTarget 'payload') `
+        -Certificate $responseCertificate
+    & (Join-Path $PSScriptRoot 'import-signed-binaries.ps1') `
+        -StagingRoot $responseTarget `
+        -SignedBinariesRoot $signPathResponse `
+        -ExpectedVersion $testVersion `
+        -ExpectedSourceRevision $testRevision `
+        -ExpectedUnsignedArchiveSha256 $testArchiveHash `
+        -ExpectedPublisher 'Fixture Publisher' | Out-Null
+    if ((Get-Content -LiteralPath (Join-Path $responseTarget 'payload\README.md') -Raw) `
+        -cne 'fixture documentation') {
+        throw 'The bounded SignPath response import changed a non-signable file.'
+    }
+    foreach ($relativePath in @('SteamSwitchboard.dll', 'SteamSwitchboard.exe')) {
+        $importedSignature = Get-AuthenticodeSignature -LiteralPath (
+            Join-Path $responseTarget "payload\$relativePath")
+        if ($null -eq $importedSignature.SignerCertificate `
+            -or $importedSignature.SignerCertificate.Thumbprint -cne $responseCertificate.Thumbprint) {
+            throw "The bounded SignPath response import lost its signer: $relativePath"
+        }
+    }
+
+    $responseCountTarget = New-SigningFixture -Scenario 'signpath-response-count-target'
+    $responseWithExtraFile = New-SignPathResponseFixture `
+        -Scenario 'extra-file' `
+        -SourcePayload (Join-Path $responseCountTarget 'payload') `
+        -Certificate $responseCertificate
+    [System.IO.File]::WriteAllText(
+        (Join-Path $responseWithExtraFile 'injected.txt'),
+        'injected',
+        [System.Text.UTF8Encoding]::new($false))
+    Assert-FixtureRejected `
+        -Action {
+            & (Join-Path $PSScriptRoot 'import-signed-binaries.ps1') `
+                -StagingRoot $responseCountTarget `
+                -SignedBinariesRoot $responseWithExtraFile `
+                -ExpectedVersion $testVersion `
+                -ExpectedSourceRevision $testRevision `
+                -ExpectedUnsignedArchiveSha256 $testArchiveHash `
+                -ExpectedPublisher 'Fixture Publisher' | Out-Null
+        } `
+        -ExpectedMessagePattern 'exactly two first-party binaries' `
+        -Scenario 'expanded SignPath response'
+
+    $responseMutationTarget = New-SigningFixture -Scenario 'signpath-response-mutation-target'
+    $mutatedResponse = New-SignPathResponseFixture `
+        -Scenario 'mutated-binary' `
+        -SourcePayload (Join-Path $responseMutationTarget 'payload') `
+        -Certificate $responseCertificate
+    $mutatedResponsePath = Join-Path $mutatedResponse 'SteamSwitchboard.exe'
+    $mutatedResponseBytes = [System.IO.File]::ReadAllBytes($mutatedResponsePath)
+    $mutatedResponseBytes[2] = $mutatedResponseBytes[2] -bxor 1
+    [System.IO.File]::WriteAllBytes($mutatedResponsePath, $mutatedResponseBytes)
+    Assert-FixtureRejected `
+        -Action {
+            & (Join-Path $PSScriptRoot 'import-signed-binaries.ps1') `
+                -StagingRoot $responseMutationTarget `
+                -SignedBinariesRoot $mutatedResponse `
+                -ExpectedVersion $testVersion `
+                -ExpectedSourceRevision $testRevision `
+                -ExpectedUnsignedArchiveSha256 $testArchiveHash `
+                -ExpectedPublisher 'Fixture Publisher' | Out-Null
+        } `
+        -ExpectedMessagePattern 'changed outside Authenticode metadata' `
+        -Scenario 'code-mutated SignPath response'
 
     $importTarget = New-SigningFixture -Scenario 'import-target'
     $downloadedPayload = New-DownloadedSignedPayloadFixture `
@@ -281,6 +382,10 @@ finally {
     if ($null -ne $testCertificate) {
         Remove-Item -LiteralPath (
             "Cert:\CurrentUser\My\$($testCertificate.Thumbprint)") -Force
+    }
+    if ($null -ne $responseCertificate) {
+        Remove-Item -LiteralPath (
+            "Cert:\CurrentUser\My\$($responseCertificate.Thumbprint)") -Force
     }
     foreach ($root in $testRoots) {
         $validatedRoot = Get-ValidatedSigningStagingRoot -StagingRoot $root

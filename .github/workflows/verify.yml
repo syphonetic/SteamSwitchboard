@@ -200,8 +200,8 @@ jobs:
     timeout-minutes: 90
     environment: release
     permissions:
+      actions: read
       contents: read
-      id-token: write
     env:
       ContinuousIntegrationBuild: 'true'
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
@@ -211,13 +211,13 @@ jobs:
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_REF_PROTECTED: ${{ github.ref_protected }}
       SIGNING_STAGING_NAME: SteamSwitchboard-signing-${{ github.run_id }}-${{ github.run_attempt }}
-      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-      ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
-      ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
-      ARTIFACT_SIGNING_PUBLISHER: ${{ vars.ARTIFACT_SIGNING_PUBLISHER }}
+      SIGNPATH_RESPONSE_NAME: SteamSwitchboard-signpath-response-${{ github.run_id }}-${{ github.run_attempt }}
+      SIGNPATH_API_TOKEN_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+      SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+      SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+      SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+      EXPECTED_SIGNING_PUBLISHER: SignPath Foundation
 
     steps:
       - name: Check out exact release source
@@ -273,40 +273,30 @@ jobs:
           }
           $headCommit = $headCommitOutput[0].Trim()
 
-          foreach ($identifier in @(
-              $env:AZURE_CLIENT_ID,
-              $env:AZURE_TENANT_ID,
-              $env:AZURE_SUBSCRIPTION_ID)) {
-            $parsed = [Guid]::Empty
-            if (-not [Guid]::TryParse($identifier, [ref]$parsed) -or $parsed -eq [Guid]::Empty) {
-              throw 'An Azure OIDC identifier is missing or invalid.'
-            }
+          if ($env:SIGNPATH_API_TOKEN_CONFIGURED -cne 'true') {
+            throw 'The approval-gated SignPath API token is not configured.'
           }
-          foreach ($value in @(
-              $env:ARTIFACT_SIGNING_ACCOUNT,
-              $env:ARTIFACT_SIGNING_PROFILE,
-              $env:ARTIFACT_SIGNING_PUBLISHER)) {
-            if ([string]::IsNullOrWhiteSpace($value) -or $value.Length -gt 256 -or $value -match '[\x00-\x1F\x7F]') {
-              throw 'An Artifact Signing release value is missing or invalid.'
-            }
+          $organizationId = [Guid]::Empty
+          if (-not [Guid]::TryParse(
+                $env:SIGNPATH_ORGANIZATION_ID,
+                [ref]$organizationId) `
+              -or $organizationId -eq [Guid]::Empty) {
+            throw 'The SignPath organization identifier is missing or invalid.'
           }
-          $endpoint = $null
-          if (-not [Uri]::TryCreate(
-                $env:ARTIFACT_SIGNING_ENDPOINT,
-                [UriKind]::Absolute,
-                [ref]$endpoint) `
-              -or $endpoint.Scheme -cne 'https' `
-              -or -not $endpoint.Host.EndsWith(
-                '.codesigning.azure.net',
-                [StringComparison]::OrdinalIgnoreCase) `
-              -or -not [string]::IsNullOrEmpty($endpoint.UserInfo) `
-              -or -not [string]::IsNullOrEmpty($endpoint.Query) `
-              -or -not [string]::IsNullOrEmpty($endpoint.Fragment)) {
-            throw 'The Artifact Signing endpoint is invalid.'
+          foreach ($slug in @(
+              $env:SIGNPATH_PROJECT_SLUG,
+              $env:SIGNPATH_SIGNING_POLICY_SLUG,
+              $env:SIGNPATH_ARTIFACT_CONFIGURATION_SLUG)) {
+            if ($slug -notmatch '^[A-Za-z0-9._-]{1,128}$') {
+              throw 'A SignPath project, policy, or artifact-configuration slug is missing or invalid.'
+            }
           }
 
+          $versionCore = ($version -split '-', 2)[0]
           "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "RELEASE_SOURCE_REVISION=$headCommit" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SIGNPATH_PRODUCT_VERSION=$version+$headCommit" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SIGNPATH_FILE_VERSION=$versionCore.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Restore locked packages
         shell: pwsh
@@ -343,39 +333,50 @@ jobs:
             -ExpectedSourceRevision $env:RELEASE_SOURCE_REVISION `
             -StagingRoot $staging
 
-      - name: Authenticate to Azure with GitHub OIDC
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+      - name: Upload exact unsigned binaries for origin-verified signing
+        id: upload-unsigned-signing-payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Sign first-party binaries with Microsoft Artifact Signing
-        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
-        with:
-          endpoint: ${{ env.ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ env.ARTIFACT_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ env.ARTIFACT_SIGNING_PROFILE }}
-          files: |
+          name: unsigned-signing-request-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
             ${{ runner.temp }}\${{ env.SIGNING_STAGING_NAME }}\payload\SteamSwitchboard.dll
             ${{ runner.temp }}\${{ env.SIGNING_STAGING_NAME }}\payload\SteamSwitchboard.exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          description: SteamSwitchboard
-          description-url: https://github.com/syphonetic/SteamSwitchboard
-          exclude-environment-credential: true
-          exclude-workload-identity-credential: true
-          exclude-managed-identity-credential: true
-          exclude-shared-token-cache-credential: true
-          exclude-visual-studio-credential: true
-          exclude-visual-studio-code-credential: true
-          exclude-azure-cli-credential: false
-          exclude-azure-powershell-credential: true
-          exclude-azure-developer-cli-credential: true
-          exclude-interactive-browser-credential: true
-          cache-dependencies: false
-          trace: false
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Sign first-party binaries through SignPath Foundation
+        id: signpath-sign
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ env.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned-signing-payload.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          service-unavailable-timeout-in-seconds: 600
+          download-signed-artifact-timeout-in-seconds: 300
+          output-artifact-directory: ${{ runner.temp }}\${{ env.SIGNPATH_RESPONSE_NAME }}
+          parameters: |
+            productVersion: "${{ env.SIGNPATH_PRODUCT_VERSION }}"
+            fileVersion: "${{ env.SIGNPATH_FILE_VERSION }}"
+
+      - name: Import bounded SignPath response into the locked payload
+        shell: pwsh
+        run: |
+          $staging = Join-Path $env:RUNNER_TEMP $env:SIGNING_STAGING_NAME
+          $signedBinaries = Join-Path $env:RUNNER_TEMP $env:SIGNPATH_RESPONSE_NAME
+          ./scripts/import-signed-binaries.ps1 `
+            -StagingRoot $staging `
+            -SignedBinariesRoot $signedBinaries `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -ExpectedSourceRevision $env:RELEASE_SOURCE_REVISION `
+            -ExpectedUnsignedArchiveSha256 $env:UNSIGNED_ARCHIVE_SHA256 `
+            -ExpectedPublisher $env:EXPECTED_SIGNING_PUBLISHER
 
       - name: Transfer signed payload for isolated validation
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -410,7 +411,7 @@ jobs:
       RELEASE_TAG: ${{ github.ref_name }}
       VALIDATION_STAGING_NAME: SteamSwitchboard-signing-validation-${{ github.run_id }}-${{ github.run_attempt }}
       SIGNED_PAYLOAD_NAME: SteamSwitchboard-signed-payload-${{ github.run_id }}-${{ github.run_attempt }}
-      ARTIFACT_SIGNING_PUBLISHER: ${{ vars.ARTIFACT_SIGNING_PUBLISHER }}
+      EXPECTED_SIGNING_PUBLISHER: SignPath Foundation
 
     steps:
       - name: Check out exact release source
@@ -460,10 +461,8 @@ jobs:
             throw 'The release source no longer matches the version tag.'
           }
           $sourceRevision = $sourceRevisionOutput[0].Trim()
-          if ([string]::IsNullOrWhiteSpace($env:ARTIFACT_SIGNING_PUBLISHER) `
-              -or $env:ARTIFACT_SIGNING_PUBLISHER.Length -gt 256 `
-              -or $env:ARTIFACT_SIGNING_PUBLISHER -match '[\x00-\x1F\x7F]') {
-            throw 'The expected Artifact Signing publisher is missing or invalid.'
+          if ($env:EXPECTED_SIGNING_PUBLISHER -cne 'SignPath Foundation') {
+            throw 'The expected SignPath Foundation publisher changed.'
           }
 
           "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -527,7 +526,7 @@ jobs:
             -ExpectedVersion $env:RELEASE_VERSION `
             -ExpectedSourceRevision $env:RELEASE_SOURCE_REVISION `
             -ExpectedUnsignedArchiveSha256 $env:UNSIGNED_ARCHIVE_SHA256 `
-            -ExpectedPublisher $env:ARTIFACT_SIGNING_PUBLISHER
+            -ExpectedPublisher $env:EXPECTED_SIGNING_PUBLISHER
 
       - name: Attest independently validated release provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -629,6 +628,7 @@ jobs:
             '--verify-tag',
             '--fail-on-no-commits',
             '--generate-notes',
+            '--notes', "Free code signing provided by SignPath.io, certificate by SignPath Foundation.`n`n[Code signing policy](https://github.com/syphonetic/SteamSwitchboard/blob/$env:GITHUB_SHA/CODE_SIGNING_POLICY.md) · [Privacy](https://github.com/syphonetic/SteamSwitchboard/blob/$env:GITHUB_SHA/docs/PRIVACY.md)",
             '--title', "SteamSwitchboard $env:RELEASE_VERSION"
           )
           if ($env:RELEASE_VERSION.Contains('-')) {

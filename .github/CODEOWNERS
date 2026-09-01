@@ -1,6 +1,8 @@
 # Release and trust-boundary changes always request maintainer review.
 * @syphonetic
 /.github/workflows/ @syphonetic
+/.signpath/ @syphonetic
+/CODE_SIGNING_POLICY.md @syphonetic
 /scripts/ @syphonetic
 /NuGet.config @syphonetic
 /Directory.Build.props @syphonetic
