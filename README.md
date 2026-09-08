@@ -8,7 +8,7 @@ SteamSwitchboard is a privacy-first Windows companion for people who use several
 
 ![SteamSwitchboard account workspace](artifacts/ui-final.png)
 
-> **Initial release:** version 1.0.0 is the first public source release. Any locally generated Windows build is unsigned; its checksum detects accidental corruption but does not authenticate the publisher. CI deliberately does not upload that candidate. Sign the first-party binaries and distribute them through an authenticated installer/package before public binary distribution.
+> **Release status:** the immutable `v1.0.0` tag has a clearly labelled **unsigned prerelease candidate** for public evaluation. Its SHA-256 checksum provides integrity only; Windows reports an unknown publisher. SignPath Foundation declined the initial free-signing application on 2026-09-03 because the project had not yet established the public adoption and independent visibility required for its certificate. No SteamSwitchboard release is currently publisher-signed. The prepared version 1.0.1 signing pipeline remains dormant and fail-closed unless a trusted signing provider is approved and configured.
 
 ## What it solves
 
@@ -20,7 +20,7 @@ SteamSwitchboard is a privacy-first Windows companion for people who use several
 
 ## Quick start
 
-1. Extract the downloaded `SteamSwitchboard-1.0.0-win-x64.zip`.
+1. From the [v1.0.0 GitHub prerelease](https://github.com/syphonetic/SteamSwitchboard/releases/tag/v1.0.0), download `SteamSwitchboard-1.0.0-win-x64.zip` and its `.sha256` file, then verify the checksum before extracting it. The package is unsigned; read the release warning before running it.
 2. Run `SteamSwitchboard.exe`.
 3. Choose **Add account**, enter a private profile nickname and the account's exact Steam login name, then sign in on the official Steam page shown inside the app.
 4. Select any account to use its conversation workspace. Up to 16 open profiles can notify you in the background; additional saved profiles reopen when selected.
@@ -68,6 +68,10 @@ The unread taskbar badge uses Windows' native overlay surface. Windows may hide 
 
 Local data lives at `%LOCALAPPDATA%\SteamSwitchboard`. See [Privacy](docs/PRIVACY.md), [Security](SECURITY.md), and [Architecture](docs/ARCHITECTURE.md) for the complete boundary.
 
+## Code signing status
+
+The initial SignPath Foundation application was declined for insufficient public adoption and visibility. The repository retains a prepared, fail-closed integration for a possible future reapplication, but it has no credentials and cannot publish an unsigned or falsely labelled production release. See the [inactive code-signing policy](CODE_SIGNING_POLICY.md) and [reapplication record](docs/SIGNPATH_ONBOARDING.md). The only current binary is the explicitly unsigned v1.0.0 evaluation prerelease.
+
 ## Build and verify
 
 Development requires the .NET 9 SDK on Windows.
@@ -96,13 +100,13 @@ For the extended dependency, secret, configuration, and static-analysis pass:
 ./scripts/security-audit.ps1 -RequireExternalScanners
 ```
 
-To create the self-contained Windows package:
+To create an unsigned self-contained development package:
 
 ```powershell
 ./scripts/package.ps1
 ```
 
-The ZIP and SHA-256 checksum are written to `artifacts/release/`. Packaging requires a clean Git checkout, binds both first-party binaries to the complete source revision, includes the exact restored third-party license/notice texts, validates archive paths before extraction, runs adversarial validator fixtures, excludes debug/session data, and normalises ZIP order and timestamps. It rechecks the source revision and worktree immediately before publishing the result. Pass `-RequireSignature` only in a release environment where first-party binaries have been Authenticode-signed.
+The ZIP and SHA-256 checksum are written to `artifacts/release/`. Packaging requires a clean Git checkout, binds both first-party binaries to the complete source revision, includes the exact restored third-party license/notice texts, validates archive paths before extraction, runs adversarial validator fixtures, excludes debug/session data, and normalises ZIP order and timestamps. It rechecks the source revision and worktree immediately before publishing the result. A dormant protected tag workflow is prepared to send only the two first-party binaries to SignPath if the Foundation approves a future reapplication and the required protected configuration is installed. Without that approval and configuration, it fails closed before signing or publication.
 
 ## Project map
 
@@ -114,11 +118,12 @@ The ZIP and SHA-256 checksum are written to `artifacts/release/`. Packaging requ
 - `docs/GITHUB_RELEASE.md` — beginner GitHub push, Actions build/scan, source-release, and signed-binary requirements
 - `scripts/verify.ps1` — reproducible verification entry point
 - `scripts/package.ps1` — self-contained Windows release packaging
+- `scripts/prepare-signed-release.ps1` / `finalize-signed-release.ps1` — integrity-locked cloud-signing boundary
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the required local checks and project security boundaries. GitHub pushes and pull requests run the same Windows Release verification gate automatically.
 
-GitHub Actions uses checksum-pinned Gitleaks plus pinned Semgrep and Trivy before the Windows Release build/test/package gate, then independently rebuilds the package and requires matching hashes. See the [GitHub release guide](docs/GITHUB_RELEASE.md) for the exact first-push, source-release, and signed-binary steps.
+GitHub Actions uses checksum-pinned Gitleaks plus pinned Semgrep and Trivy before the Windows Release build/test/package gate, then independently rebuilds the package and requires matching hashes. The dormant protected-tag path can invoke SignPath Foundation signing only after future approval, protected configuration, and manual approval; otherwise it stops without publishing. See the [GitHub release guide](docs/GITHUB_RELEASE.md) and [SignPath reapplication record](docs/SIGNPATH_ONBOARDING.md).
 
 SteamSwitchboard is unofficial and is not affiliated with or endorsed by Valve Corporation. Steam and the Steam logo are trademarks of Valve Corporation.

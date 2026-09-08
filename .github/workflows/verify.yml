@@ -2,7 +2,13 @@ name: Verify
 
 on:
   push:
+    branches:
+      - main
+    tags:
+      - 'v*'
   pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -10,7 +16,7 @@ permissions:
 
 concurrency:
   group: verify-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
   security-scanners:
@@ -180,3 +186,466 @@ jobs:
             throw "Package reproducibility check failed: $firstHash != $secondHash"
           }
           Write-Host "Reproducible package SHA-256: $secondHash"
+
+  sign-release:
+    name: Build and sign Windows release
+    if: >-
+      github.repository == 'syphonetic/SteamSwitchboard' &&
+      github.ref_type == 'tag' &&
+      startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - security-scanners
+      - windows-release
+    runs-on: windows-2025
+    timeout-minutes: 90
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+    env:
+      ContinuousIntegrationBuild: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      RestoreLockedMode: 'true'
+      TreatWarningsAsErrors: 'true'
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_REF_PROTECTED: ${{ github.ref_protected }}
+      SIGNING_STAGING_NAME: SteamSwitchboard-signing-${{ github.run_id }}-${{ github.run_attempt }}
+      SIGNPATH_RESPONSE_NAME: SteamSwitchboard-signpath-response-${{ github.run_id }}-${{ github.run_attempt }}
+      SIGNPATH_API_TOKEN_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+      SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+      SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+      SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+      EXPECTED_SIGNING_PUBLISHER: SignPath Foundation
+
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 9.0.317
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Validate protected release identity and configuration
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_REF_PROTECTED -cne 'true') {
+            throw 'Public releases require a protected version tag.'
+          }
+          if ($env:RELEASE_TAG -notmatch '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "Release tag '$env:RELEASE_TAG' is malformed."
+          }
+          $version = $Matches.version
+          [xml] $project = Get-Content -LiteralPath './src/SteamSwitchboard.App/SteamSwitchboard.App.csproj' -Raw
+          $projectVersions = @(
+            $project.Project.PropertyGroup |
+              ForEach-Object { [string]$_.Version } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )
+          if ($projectVersions.Count -ne 1 -or $projectVersions[0] -cne $version) {
+            throw 'The protected tag does not exactly match the project version.'
+          }
+
+          $tagTypeOutput = @(& git cat-file -t "refs/tags/$env:RELEASE_TAG")
+          $tagTypeStatus = $LASTEXITCODE
+          if ($tagTypeStatus -ne 0 `
+              -or $tagTypeOutput.Count -ne 1 `
+              -or $tagTypeOutput[0].Trim() -cne 'tag') {
+            throw 'Public releases require an annotated Git tag.'
+          }
+          $tagCommitOutput = @(& git rev-list -n 1 "refs/tags/$env:RELEASE_TAG")
+          $tagCommitStatus = $LASTEXITCODE
+          $headCommitOutput = @(& git rev-parse --verify HEAD)
+          $headCommitStatus = $LASTEXITCODE
+          if ($tagCommitStatus -ne 0 `
+              -or $headCommitStatus -ne 0 `
+              -or $tagCommitOutput.Count -ne 1 `
+              -or $headCommitOutput.Count -ne 1 `
+              -or $tagCommitOutput[0].Trim() -cne $headCommitOutput[0].Trim()) {
+            throw 'The checked-out source does not match the release tag.'
+          }
+          $headCommit = $headCommitOutput[0].Trim()
+
+          if ($env:SIGNPATH_API_TOKEN_CONFIGURED -cne 'true') {
+            throw 'The approval-gated SignPath API token is not configured.'
+          }
+          $organizationId = [Guid]::Empty
+          if (-not [Guid]::TryParse(
+                $env:SIGNPATH_ORGANIZATION_ID,
+                [ref]$organizationId) `
+              -or $organizationId -eq [Guid]::Empty) {
+            throw 'The SignPath organization identifier is missing or invalid.'
+          }
+          foreach ($slug in @(
+              $env:SIGNPATH_PROJECT_SLUG,
+              $env:SIGNPATH_SIGNING_POLICY_SLUG,
+              $env:SIGNPATH_ARTIFACT_CONFIGURATION_SLUG)) {
+            if ($slug -notmatch '^[A-Za-z0-9._-]{1,128}$') {
+              throw 'A SignPath project, policy, or artifact-configuration slug is missing or invalid.'
+            }
+          }
+
+          $versionCore = ($version -split '-', 2)[0]
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_SOURCE_REVISION=$headCommit" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SIGNPATH_PRODUCT_VERSION=$version+$headCommit" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SIGNPATH_FILE_VERSION=$versionCore.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Restore locked packages
+        shell: pwsh
+        run: dotnet restore ./SteamSwitchboard.sln --locked-mode
+
+      - name: Reproduce the exact unsigned signing candidate
+        shell: pwsh
+        run: |
+          ./scripts/package.ps1 -Configuration Release -Runtime win-x64
+          $archive = [IO.Path]::GetFullPath(
+            "./artifacts/release/SteamSwitchboard-$env:RELEASE_VERSION-win-x64.zip")
+          $checksum = "$archive.sha256"
+          $firstHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+
+          dotnet clean ./SteamSwitchboard.sln --configuration Release
+          ./scripts/package.ps1 -Configuration Release -Runtime win-x64
+          $secondHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          if ($firstHash -cne $secondHash) {
+            throw "Signing-candidate reproducibility failed: $firstHash != $secondHash"
+          }
+
+          "RELEASE_ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_CHECKSUM=$checksum" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "UNSIGNED_ARCHIVE_SHA256=$($secondHash.ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prepare integrity-locked signing payload
+        shell: pwsh
+        run: |
+          $staging = Join-Path $env:RUNNER_TEMP $env:SIGNING_STAGING_NAME
+          ./scripts/prepare-signed-release.ps1 `
+            -ArchivePath $env:RELEASE_ARCHIVE `
+            -ChecksumPath $env:RELEASE_CHECKSUM `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -ExpectedSourceRevision $env:RELEASE_SOURCE_REVISION `
+            -StagingRoot $staging
+
+      - name: Upload exact unsigned binaries for origin-verified signing
+        id: upload-unsigned-signing-payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-signing-request-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}\${{ env.SIGNING_STAGING_NAME }}\payload\SteamSwitchboard.dll
+            ${{ runner.temp }}\${{ env.SIGNING_STAGING_NAME }}\payload\SteamSwitchboard.exe
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Sign first-party binaries through SignPath Foundation
+        id: signpath-sign
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ env.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned-signing-payload.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          service-unavailable-timeout-in-seconds: 600
+          download-signed-artifact-timeout-in-seconds: 300
+          output-artifact-directory: ${{ runner.temp }}\${{ env.SIGNPATH_RESPONSE_NAME }}
+          parameters: |
+            productVersion: "${{ env.SIGNPATH_PRODUCT_VERSION }}"
+            fileVersion: "${{ env.SIGNPATH_FILE_VERSION }}"
+
+      - name: Import bounded SignPath response into the locked payload
+        shell: pwsh
+        run: |
+          $staging = Join-Path $env:RUNNER_TEMP $env:SIGNING_STAGING_NAME
+          $signedBinaries = Join-Path $env:RUNNER_TEMP $env:SIGNPATH_RESPONSE_NAME
+          ./scripts/import-signed-binaries.ps1 `
+            -StagingRoot $staging `
+            -SignedBinariesRoot $signedBinaries `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -ExpectedSourceRevision $env:RELEASE_SOURCE_REVISION `
+            -ExpectedUnsignedArchiveSha256 $env:UNSIGNED_ARCHIVE_SHA256 `
+            -ExpectedPublisher $env:EXPECTED_SIGNING_PUBLISHER
+
+      - name: Transfer signed payload for isolated validation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-payload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\${{ env.SIGNING_STAGING_NAME }}\payload
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          include-hidden-files: true
+
+  validate-release:
+    name: Independently validate signed release
+    if: >-
+      github.repository == 'syphonetic/SteamSwitchboard' &&
+      github.ref_type == 'tag' &&
+      startsWith(github.ref, 'refs/tags/v')
+    needs: sign-release
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      ContinuousIntegrationBuild: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      RestoreLockedMode: 'true'
+      TreatWarningsAsErrors: 'true'
+      RELEASE_TAG: ${{ github.ref_name }}
+      VALIDATION_STAGING_NAME: SteamSwitchboard-signing-validation-${{ github.run_id }}-${{ github.run_attempt }}
+      SIGNED_PAYLOAD_NAME: SteamSwitchboard-signed-payload-${{ github.run_id }}-${{ github.run_attempt }}
+      EXPECTED_SIGNING_PUBLISHER: SignPath Foundation
+
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 9.0.317
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Download signed payload
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-payload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\${{ env.SIGNED_PAYLOAD_NAME }}
+
+      - name: Revalidate release source and publisher
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw 'The release tag is malformed.'
+          }
+          $version = $Matches.version
+          [xml] $project = Get-Content -LiteralPath './src/SteamSwitchboard.App/SteamSwitchboard.App.csproj' -Raw
+          $projectVersions = @(
+            $project.Project.PropertyGroup |
+              ForEach-Object { [string]$_.Version } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )
+          if ($projectVersions.Count -ne 1 -or $projectVersions[0] -cne $version) {
+            throw 'The release source version changed before signed validation.'
+          }
+          $sourceRevisionOutput = @(& git rev-parse --verify HEAD)
+          $sourceRevisionStatus = $LASTEXITCODE
+          $tagRevisionOutput = @(& git rev-list -n 1 "refs/tags/$env:RELEASE_TAG")
+          $tagRevisionStatus = $LASTEXITCODE
+          if ($sourceRevisionStatus -ne 0 `
+              -or $tagRevisionStatus -ne 0 `
+              -or $sourceRevisionOutput.Count -ne 1 `
+              -or $tagRevisionOutput.Count -ne 1 `
+              -or $sourceRevisionOutput[0].Trim() -cne $tagRevisionOutput[0].Trim()) {
+            throw 'The release source no longer matches the version tag.'
+          }
+          $sourceRevision = $sourceRevisionOutput[0].Trim()
+          if ($env:EXPECTED_SIGNING_PUBLISHER -cne 'SignPath Foundation') {
+            throw 'The expected SignPath Foundation publisher changed.'
+          }
+
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_SOURCE_REVISION=$sourceRevision" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Restore locked packages
+        shell: pwsh
+        run: dotnet restore ./SteamSwitchboard.sln --locked-mode
+
+      - name: Independently reproduce unsigned release candidate
+        shell: pwsh
+        run: |
+          ./scripts/package.ps1 -Configuration Release -Runtime win-x64
+          $archive = [IO.Path]::GetFullPath(
+            "./artifacts/release/SteamSwitchboard-$env:RELEASE_VERSION-win-x64.zip")
+          $checksum = "$archive.sha256"
+          $firstHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+
+          dotnet clean ./SteamSwitchboard.sln --configuration Release
+          ./scripts/package.ps1 -Configuration Release -Runtime win-x64
+          $secondHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          if ($firstHash -cne $secondHash) {
+            throw "Independent signing-candidate reproducibility failed: $firstHash != $secondHash"
+          }
+
+          "RELEASE_ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_CHECKSUM=$checksum" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "UNSIGNED_ARCHIVE_SHA256=$($secondHash.ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Recreate trusted signing manifest from unsigned archive
+        shell: pwsh
+        run: |
+          $staging = Join-Path $env:RUNNER_TEMP $env:VALIDATION_STAGING_NAME
+          ./scripts/prepare-signed-release.ps1 `
+            -ArchivePath $env:RELEASE_ARCHIVE `
+            -ChecksumPath $env:RELEASE_CHECKSUM `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -ExpectedSourceRevision $env:RELEASE_SOURCE_REVISION `
+            -StagingRoot $staging
+
+      - name: Import untrusted signed payload into validation boundary
+        shell: pwsh
+        run: |
+          $staging = Join-Path $env:RUNNER_TEMP $env:VALIDATION_STAGING_NAME
+          $signedPayload = Join-Path $env:RUNNER_TEMP $env:SIGNED_PAYLOAD_NAME
+          ./scripts/import-signed-payload.ps1 `
+            -StagingRoot $staging `
+            -SignedPayloadRoot $signedPayload `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -ExpectedSourceRevision $env:RELEASE_SOURCE_REVISION `
+            -ExpectedUnsignedArchiveSha256 $env:UNSIGNED_ARCHIVE_SHA256
+
+      - name: Validate and finalize timestamped package
+        shell: pwsh
+        run: |
+          $staging = Join-Path $env:RUNNER_TEMP $env:VALIDATION_STAGING_NAME
+          ./scripts/finalize-signed-release.ps1 `
+            -StagingRoot $staging `
+            -ArchivePath $env:RELEASE_ARCHIVE `
+            -ChecksumPath $env:RELEASE_CHECKSUM `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -ExpectedSourceRevision $env:RELEASE_SOURCE_REVISION `
+            -ExpectedUnsignedArchiveSha256 $env:UNSIGNED_ARCHIVE_SHA256 `
+            -ExpectedPublisher $env:EXPECTED_SIGNING_PUBLISHER
+
+      - name: Attest independently validated release provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            ${{ env.RELEASE_ARCHIVE }}
+            ${{ env.RELEASE_CHECKSUM }}
+
+      - name: Transfer immutable validated release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.RELEASE_ARCHIVE }}
+            ${{ env.RELEASE_CHECKSUM }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  publish-release:
+    name: Publish verified GitHub Release
+    if: >-
+      github.repository == 'syphonetic/SteamSwitchboard' &&
+      github.ref_type == 'tag' &&
+      startsWith(github.ref, 'refs/tags/v')
+    needs: validate-release
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      attestations: read
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+
+    steps:
+      - name: Download signed release candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/release
+
+      - name: Verify candidate identity and checksum
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw 'The release tag is malformed.'
+          }
+          $version = $Matches.version
+          $releaseRoot = [IO.Path]::GetFullPath('./artifacts/release')
+          $archive = Join-Path $releaseRoot "SteamSwitchboard-$version-win-x64.zip"
+          $checksum = "$archive.sha256"
+          $files = @(Get-ChildItem -LiteralPath $releaseRoot -File -Force)
+          if ($files.Count -ne 2 `
+              -or -not (Test-Path -LiteralPath $archive -PathType Leaf) `
+              -or -not (Test-Path -LiteralPath $checksum -PathType Leaf)) {
+            throw 'The release handoff does not contain exactly the expected two assets.'
+          }
+          $checksumText = (Get-Content -LiteralPath $checksum -Raw).Trim()
+          if ($checksumText -notmatch '^(?<hash>[0-9A-Fa-f]{64})  (?<name>[^\r\n]+)$' `
+              -or $Matches.name -cne [IO.Path]::GetFileName($archive)) {
+            throw 'The release checksum sidecar is malformed.'
+          }
+          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          if (-not $actualHash.Equals($Matches.hash, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The release handoff checksum does not match.'
+          }
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_CHECKSUM=$checksum" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify GitHub build provenance
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          foreach ($artifact in @($env:RELEASE_ARCHIVE, $env:RELEASE_CHECKSUM)) {
+            & gh attestation verify $artifact `
+              --repo $env:GITHUB_REPOSITORY `
+              --signer-workflow 'syphonetic/SteamSwitchboard/.github/workflows/verify.yml' `
+              --source-digest $env:GITHUB_SHA `
+              --source-ref $env:GITHUB_REF `
+              --deny-self-hosted-runners
+            if ($LASTEXITCODE -ne 0) {
+              throw "Release provenance verification failed for $([IO.Path]::GetFileName($artifact))."
+            }
+          }
+
+      - name: Publish immutable GitHub Release
+        id: publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $arguments = @(
+            'release', 'create', $env:RELEASE_TAG,
+            $env:RELEASE_ARCHIVE,
+            $env:RELEASE_CHECKSUM,
+            '--repo', $env:GITHUB_REPOSITORY,
+            '--verify-tag',
+            '--fail-on-no-commits',
+            '--generate-notes',
+            '--notes', "Free code signing provided by SignPath.io, certificate by SignPath Foundation.`n`n[Code signing policy](https://github.com/syphonetic/SteamSwitchboard/blob/$env:GITHUB_SHA/CODE_SIGNING_POLICY.md) · [Privacy](https://github.com/syphonetic/SteamSwitchboard/blob/$env:GITHUB_SHA/docs/PRIVACY.md)",
+            '--title', "SteamSwitchboard $env:RELEASE_VERSION"
+          )
+          if ($env:RELEASE_VERSION.Contains('-')) {
+            $arguments += '--prerelease'
+          }
+          & gh @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Release creation failed with exit code $LASTEXITCODE."
+          }
+          $releaseUrl = (& gh release view $env:RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --json url `
+            --jq '.url').Trim()
+          if ($LASTEXITCODE -ne 0 `
+              -or -not $releaseUrl.StartsWith(
+                'https://github.com/syphonetic/SteamSwitchboard/releases/tag/',
+                [StringComparison]::Ordinal)) {
+            throw 'The published release URL could not be verified.'
+          }
+          "release_url=$releaseUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append

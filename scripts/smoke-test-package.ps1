@@ -164,7 +164,8 @@ public static class SteamSwitchboardWindowCapture
     if ($process.MainWindowHandle -eq [IntPtr]::Zero) {
         throw 'The packaged app did not create a main window in time.'
     }
-    if ($process.MainWindowTitle -ne 'SteamSwitchboard — unofficial Steam companion') {
+    $expectedWindowTitle = 'SteamSwitchboard {0} unofficial Steam companion' -f [char]0x2014
+    if ($process.MainWindowTitle -ne $expectedWindowTitle) {
         throw "The packaged app exposed an unexpected window title: '$($process.MainWindowTitle)'"
     }
     Start-Sleep -Seconds 4

@@ -324,6 +324,7 @@ try {
                 -ChecksumPath $checksum `
                 -ExpectedVersion $ExpectedVersion `
                 -ExpectedSourceRevision $ExpectedSourceRevision `
+                -ExpectedPublisher 'SteamSwitchboard Unsigned Rejection Fixture' `
                 -RequireSignature | Out-Null
         }
         catch {

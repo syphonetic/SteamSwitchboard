@@ -46,6 +46,7 @@ try {
         '--no-build',
         '--no-restore'
     )
+    & (Join-Path $PSScriptRoot 'test-signing-staging.ps1')
 }
 finally {
     Pop-Location

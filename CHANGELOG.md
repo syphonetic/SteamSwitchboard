@@ -2,9 +2,31 @@
 
 All notable changes are documented here.
 
+## 1.0.1 — Unreleased
+
+Prepared source and release-security work for a future publisher-authenticated Windows binary. No v1.0.1 binary or tag has been published.
+
+### Status
+
+- SignPath Foundation declined the initial free-signing application on 2026-09-03 because the project had not yet established sufficient public adoption and independent visibility. The integration remains dormant and fail-closed for a possible future reapplication.
+- The only current binary remains the explicitly unsigned v1.0.0 evaluation prerelease. Its SHA-256 checksum provides integrity, not publisher identity.
+
+### Release security
+
+- Added a protected, tag-only SignPath Foundation pipeline for qualifying open-source releases; the Foundation certificate remains HSM-held, and no certificate private key, PFX, personal certificate, or release-capable long-lived GitHub token is stored in the repository.
+- Isolated the signing job from GitHub release-write permission, pinned every GitHub/SignPath action to an immutable commit, limited the approval-gated API token to one project/release policy, and enabled SignPath origin verification over the exact GitHub-hosted build artifact.
+- Preserved byte-for-byte reproducibility proof on the unsigned candidate before RFC 3161 timestamped signing, then independently rebuilt the trusted baseline on a fresh non-signing runner and allowed only `SteamSwitchboard.exe` and `SteamSwitchboard.dll` to change.
+- Added an integrity manifest, strict signing-staging path and inventory validation, PE-level Authenticode content hashing that excludes only permitted signature metadata, same-certificate/publisher/EKU enforcement, trusted timestamp enforcement, signed-package revalidation, malicious staging fixtures, and atomic final package replacement.
+- Added GitHub build-provenance attestations, an immutable one-day signed-candidate handoff, independent checksum and provenance verification in the publication job, and automatic release creation only from an annotated protected version tag after every existing security/build gate passes.
+
+### Distribution
+
+- Added a conditional SignPath Foundation code-signing policy, exact two-file artifact configuration, reapplication record, and protected GitHub release-environment setup instructions for maintainers.
+- Kept the `v1.0.0` tag immutable and published one exact-tag Windows package as an explicitly unsigned evaluation prerelease; `v1.0.1` remains reserved for a publisher-authenticated production binary and will not be published through the dormant workflow without trusted signing.
+
 ## 1.0.0 — 2026-08-31
 
-First GitHub-ready source release and self-contained Windows package.
+First GitHub-ready source release and self-contained Windows package. The exact-tag package was later attached to a GitHub prerelease with prominent unknown-publisher and checksum-only warnings. The subsequent SignPath Foundation application was declined for insufficient public adoption and visibility, so the release remains unsigned.
 
 ### Product
 
