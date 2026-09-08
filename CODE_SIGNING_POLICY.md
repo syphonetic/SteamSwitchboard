@@ -1,8 +1,10 @@
-# Code signing policy
+# Code signing policy — inactive future path
 
-Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+**Current status:** no SteamSwitchboard release is publisher-signed. SignPath Foundation declined the initial free-signing application on 2026-09-03 because the project had not yet established sufficient public adoption and independent visibility. This document records the controls that would apply only if a future reapplication is approved and the protected integration is configured.
 
-SteamSwitchboard is an MIT-licensed open-source project. Its official source repository is <https://github.com/syphonetic/SteamSwitchboard>, and its only official binary download location is <https://github.com/syphonetic/SteamSwitchboard/releases>. A valid public signature identifies the publisher as **SignPath Foundation**; it does not imply affiliation with or endorsement by Valve Corporation.
+If that happens, the required acknowledgement will be: “Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).” That statement does not describe the current v1.0.0 release.
+
+SteamSwitchboard is an MIT-licensed open-source project. Its official source repository is <https://github.com/syphonetic/SteamSwitchboard>, and its only official binary download location is <https://github.com/syphonetic/SteamSwitchboard/releases>. If the conditional Foundation path is activated, a valid public signature would identify the publisher as **SignPath Foundation**; it would not imply affiliation with or endorsement by Valve Corporation.
 
 ## Signed artifacts
 
@@ -15,7 +17,7 @@ Third-party runtime files are included under their own licenses and are never si
 
 ## Release controls
 
-A production signature can be requested only by the protected GitHub tag workflow after all of the following controls pass:
+The dormant workflow can request a production signature only after SignPath approval, protected configuration, and all of the following controls:
 
 1. Full-history secret scanning, dependency auditing, static analysis, compilation with warnings treated as errors, automated tests, adversarial package tests, and byte-for-byte package reproducibility.
 2. An annotated, immutable, protected `vMAJOR.MINOR.PATCH` tag whose version exactly matches the project.
@@ -25,7 +27,7 @@ A production signature can be requested only by the protected GitHub tag workflo
 6. Proof that only bounded Authenticode metadata changed in the two permitted files, followed by Windows trust, publisher, code-signing EKU, shared-certificate, and trusted timestamp validation.
 7. GitHub provenance attestation, checksum verification, and publication as a new immutable GitHub Release. Failed candidates and unsigned production candidates are never published by this workflow.
 
-The `v1.0.0` GitHub prerelease is a separately disclosed unsigned evaluation candidate published before Foundation onboarding. Its release title, notes, asset label, and documentation identify it as unsigned; its checksum provides integrity but no publisher identity. It is not evidence of a SignPath signature or GitHub build-provenance attestation. Version `v1.0.1` and later production binaries must pass the protected signing workflow above.
+The `v1.0.0` GitHub prerelease is a separately disclosed unsigned evaluation candidate. Its release title, notes, asset label, and documentation identify it as unsigned; its checksum provides integrity but no publisher identity. It is not evidence of a SignPath signature or GitHub build-provenance attestation. Version `v1.0.1` is reserved for a publisher-authenticated production binary and will not be published by this workflow unless trusted signing succeeds.
 
 The SignPath API token is an approval-gated GitHub environment secret available only to the signing job. That job has read-only source and Actions access, cannot write repository contents or Releases, and transfers only a bounded signed payload to the independent validator. No certificate private key, PFX, or personal signing certificate is stored in GitHub or this repository.
 
@@ -45,6 +47,6 @@ The application is portable and does not silently change Windows or Steam config
 
 ## Verification and incident response
 
-Users should verify the release checksum, GitHub provenance attestation, and both Authenticode signatures using the steps in the [release guide](docs/GITHUB_RELEASE.md). A valid signature must report `SignPath Foundation`, include a trusted timestamp, and correspond to the protected source tag.
+For the current unsigned v1.0.0 prerelease, users should verify the release checksum while understanding that it does not authenticate the publisher. If the conditional signing path is activated later, users must additionally verify GitHub provenance and both Authenticode signatures using the [release guide](docs/GITHUB_RELEASE.md); a Foundation signature must report `SignPath Foundation`, include a trusted timestamp, and correspond to the protected source tag.
 
 Suspected compromise, policy violation, malware, or misuse of the signing identity must be reported through GitHub's private security-advisory channel and to SignPath when appropriate. The maintainer will suspend releases, investigate the source/build/signing path, cooperate with SignPath Foundation, and request revocation when a signed artifact or signing credential may be compromised. Existing tags and immutable releases will not be silently replaced.

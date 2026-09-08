@@ -2,9 +2,14 @@
 
 All notable changes are documented here.
 
-## 1.0.1 — 2026-09-01
+## 1.0.1 — Unreleased
 
-First trusted Windows binary release candidate.
+Prepared source and release-security work for a future publisher-authenticated Windows binary. No v1.0.1 binary or tag has been published.
+
+### Status
+
+- SignPath Foundation declined the initial free-signing application on 2026-09-03 because the project had not yet established sufficient public adoption and independent visibility. The integration remains dormant and fail-closed for a possible future reapplication.
+- The only current binary remains the explicitly unsigned v1.0.0 evaluation prerelease. Its SHA-256 checksum provides integrity, not publisher identity.
 
 ### Release security
 
@@ -16,12 +21,12 @@ First trusted Windows binary release candidate.
 
 ### Distribution
 
-- Added the SignPath Foundation code-signing policy, exact two-file artifact configuration, application/onboarding record, and GitHub release-environment setup instructions for maintainers.
-- Kept the `v1.0.0` tag immutable and published one exact-tag Windows package as an explicitly unsigned prerelease candidate for evaluation and Foundation eligibility review; `v1.0.1` remains the first version eligible for a signed production binary after SignPath approves and activates the open-source project.
+- Added a conditional SignPath Foundation code-signing policy, exact two-file artifact configuration, reapplication record, and protected GitHub release-environment setup instructions for maintainers.
+- Kept the `v1.0.0` tag immutable and published one exact-tag Windows package as an explicitly unsigned evaluation prerelease; `v1.0.1` remains reserved for a publisher-authenticated production binary and will not be published through the dormant workflow without trusted signing.
 
 ## 1.0.0 — 2026-08-31
 
-First GitHub-ready source release and self-contained Windows package. The exact-tag package was later attached to a GitHub prerelease with prominent unknown-publisher and checksum-only warnings while Foundation onboarding was pending.
+First GitHub-ready source release and self-contained Windows package. The exact-tag package was later attached to a GitHub prerelease with prominent unknown-publisher and checksum-only warnings. The subsequent SignPath Foundation application was declined for insufficient public adoption and visibility, so the release remains unsigned.
 
 ### Product
 

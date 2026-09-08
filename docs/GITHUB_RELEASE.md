@@ -2,9 +2,11 @@
 
 SteamSwitchboard uses one `Verify` workflow for pull requests, pushes, and protected version tags. Ordinary runs have read-only repository access. A version tag can publish a Windows binary only after all source/dependency scanners, tests, and reproducible-package gates pass.
 
-Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). See the repository's [code signing policy](../CODE_SIGNING_POLICY.md).
+**Signing status:** inactive. SignPath Foundation declined the initial free-signing application on 2026-09-03 for insufficient public adoption and independent visibility. No current release is publisher-signed, and the protected tag workflow has no signing credentials. See the repository's [conditional code signing policy](../CODE_SIGNING_POLICY.md).
 
-## Protected release design
+## Dormant protected release design
+
+The following design is retained for a possible future SignPath approval. Until approval and protected configuration exist, it fails closed before signing and publishes nothing.
 
 1. The approval-gated `sign-release` job rebuilds the unsigned ZIP twice and requires identical SHA-256 hashes.
 2. It validates/extracts that exact candidate and records every payload path, length, and hash. Only `SteamSwitchboard.exe` and `SteamSwitchboard.dll` are uploaded as a one-day GitHub artifact.
@@ -16,18 +18,18 @@ Free code signing provided by [SignPath.io](https://signpath.io/), certificate b
 
 Every referenced GitHub/SignPath action is pinned to an immutable commit. The certificate private key remains in SignPath's HSM. No PFX, personal signing certificate, or release-capable long-lived GitHub token belongs in this repository.
 
-## Apply for free open-source signing
+## Reapply for free open-source signing
 
-The project owner must submit the application at <https://signpath.org/apply>. Use the exact public details and project description in [SIGNPATH_ONBOARDING.md](SIGNPATH_ONBOARDING.md). Before submission:
+Reapply only after the project has genuine, independently verifiable adoption and visibility. Use the public details and project description in [SIGNPATH_ONBOARDING.md](SIGNPATH_ONBOARDING.md). Before a future submission:
 
 1. Keep the repository public and enable multi-factor authentication on GitHub.
 2. Confirm that the MIT license, application description, download page, privacy policy, uninstall instructions, team roles, and this code-signing policy are visible.
 3. Disclose the clearly labelled unsigned `v1.0.0` prerelease candidate and its checksum-only trust boundary. Ask whether it satisfies the Foundation's existing-binary-release requirement; do not describe it as signed or GitHub-attested.
 4. Accept that approval is discretionary, signing displays `SignPath Foundation` rather than a personal publisher name, and every production signature requires manual approval.
 
-Do not create or publish the `v1.0.1` tag while the application is pending. Ordinary pull-request CI remains fully functional without SignPath configuration, while tag signing fails closed.
+Do not create or publish the `v1.0.1` tag while the integration is inactive. Ordinary pull-request and branch CI remains fully functional without SignPath configuration, while protected-tag signing fails closed.
 
-## Configure SignPath after approval
+## Configure SignPath after a future approval
 
 Use the exact organization and slugs assigned in the SignPath dashboard:
 
@@ -50,7 +52,7 @@ The repository uses a GitHub environment named exactly `release`:
 4. Keep `main` protected with `Source and dependency security gate` and `Windows Release gate` required before merging.
 5. Keep release immutability enabled under **Settings → General → Releases**.
 
-After SignPath approval, add these values to the `release` environment—not repository-wide configuration:
+Only after a future SignPath approval, add these values to the `release` environment—not repository-wide configuration:
 
 | Kind | Name | Value |
 |---|---|---|
@@ -85,7 +87,7 @@ git push -u origin my-change
 
 Open a pull request, review every changed path, and wait for both required gates. Merge only after they pass.
 
-`v1.0.0` is the immutable initial tag and has one explicitly unsigned prerelease package. Do not move, delete, or recreate the tag, and do not replace its assets in place. Version `1.0.1` is the first signed-binary candidate. After the SignPath application is approved, all GitHub/SignPath configuration is independently checked, and the release-pipeline pull request is merged:
+`v1.0.0` is the immutable initial tag and has one explicitly unsigned prerelease package. Do not move, delete, or recreate the tag, and do not replace its assets in place. Version `1.0.1` is reserved for the first publisher-authenticated binary. Run the following flow only after a future SignPath application is approved and all GitHub/SignPath configuration is independently checked:
 
 ```powershell
 git switch main
@@ -150,7 +152,7 @@ Windows' Properties dialog must show the same Digital Signatures identity. A new
 ## Troubleshooting
 
 - **Tag is unprotected:** restore the active `v*` tag ruleset; do not remove the workflow check.
-- **SignPath configuration is missing:** wait for Foundation approval, then set the one secret and four environment variables exactly as assigned.
+- **SignPath configuration is missing:** expected while the integration is inactive. Do not tag a release; after future Foundation approval, set the one secret and four environment variables exactly as assigned.
 - **Origin verification fails:** confirm the SignPath GitHub App repository scope, predefined GitHub trusted-build link, exact repository URL, protected ref policy, and GitHub-hosted runners.
 - **Signing request is awaiting approval:** inspect the source commit, workflow, artifact configuration, product/file-version parameters, and exact two-file artifact before approving it in SignPath.
 - **Response shape or publisher fails:** do not loosen the importer. Confirm the artifact configuration signs exactly the two root files with the Foundation certificate.
